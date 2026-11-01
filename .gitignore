@@ -2,6 +2,7 @@
 build/
 out/
 *.apk
+!release/*.apk
 *.ap_
 *.dex
 *.class

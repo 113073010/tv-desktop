@@ -42,6 +42,29 @@
 - 7×2 海报墙，横向滚动分页，默认 250 条高分片单
 - 点击海报 → 唤醒 TVBox 并触发搜索
 
+## 恢复 / 重装（给 Agent 或命令行）
+
+设备刷机、换机后想恢复这三个 TAB，**不需要重新编译**，直接用仓库里的 `release/` 目录：
+
+```bash
+adb connect 192.168.1.10:5555
+adb shell su -c id                      # 确认 uid=0(root)
+adb push release /data/local/tmp/tvrestore
+adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh'
+```
+
+`release/` 里已包含：
+
+| 文件 | 说明 |
+|---|---|
+| `news.apk` / `live.apk` / `douban.apk` | 三个插件（v50 / v24 / v46） |
+| `launcher_new.db` | 已登记三个 TAB 的桌面数据库 |
+| `restore.sh` | 设备端恢复脚本（幂等，自动备份原库） |
+| `restore-lite.apk` | 电视端图形化工具（4 个按钮，不含 TVBox） |
+| `restore.bat` | Windows 双击运行 |
+| `SHA256SUMS.txt` | 校验和 |
+
+详细步骤、验证命令、回滚方法见 **[docs/RESTORE.md](docs/RESTORE.md)**。
 ## 快速开始
 
 ### 前提
