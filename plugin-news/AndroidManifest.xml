@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.dsh.tvdesk.news"
+    android:versionCode="50"
+    android:versionName="1.0.0">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="21" />
+
+    <application
+        android:label="新闻"
+        android:hasCode="true">
+
+        <meta-data
+            android:name="ILePluginCreateApi"
+            android:value="com.dsh.tvdesk.news.CreateApi" />
+
+        <meta-data
+            android:name="minDependentVersion"
+            android:value="1.0.0" />
+
+        <meta-data
+            android:name="widgetName"
+            android:value="新闻" />
+
+        <meta-data
+            android:name="dependentPackages"
+            android:value="com.stv.launcher.sdk;android.support.v4" />
+    </application>
+</manifest>

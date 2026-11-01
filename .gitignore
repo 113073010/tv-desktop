@@ -1,0 +1,32 @@
+# 构建产物
+build/
+out/
+*.apk
+*.ap_
+*.dex
+*.class
+*.jar
+
+# 签名
+*.jks
+*.keystore
+*.p12
+
+# 备份/恢复包（含第三方二进制与个人数据）
+backup/
+restore.apk
+tvdesk-*.zip
+
+# 临时
+tmp/
+probe/
+shots/
+*.log
+*.xml.bak
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

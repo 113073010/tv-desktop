@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.dsh.tvdesk.restore"
+    android:versionCode="2"
+    android:versionName="2.0.0">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="21" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <application
+        android:label="TAB 恢复工具"
+        android:icon="@drawable/icon"
+        android:banner="@drawable/banner"
+        android:allowBackup="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="TAB 恢复工具"
+            android:icon="@drawable/icon"
+            android:exported="true"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
