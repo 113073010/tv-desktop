@@ -310,6 +310,90 @@ cd plugin-news
 - `AssetManager` 不认 assets 子目录 → 恢复工具的资源全部平铺在 assets 根目录
 - `su -c` 传多行脚本会失败 → 先写文件再 `sh 文件`
 
+## 逆向笔记（这个插件机制是怎么找到的）
+
+网上没有任何关于乐视桌面插件开发的中文资料，这部分完全靠对设备上 `com.stv.launcher` 的逆向。
+把过程记下来，方便后来人少走弯路。
+
+### 1. 定位桌面
+
+```bash
+adb shell pm list packages | grep launcher
+# package:com.stv.launcher
+
+adb shell dumpsys package com.stv.launcher | grep -i "plugin\|sdk"
+```
+
+### 2. 找到插件的存放方式
+
+```bash
+adb shell su -c 'ls -l /data/data/com.stv.launcher/files/plugins/'
+```
+
+里面躺着两个系统自带插件（`com.stv.plugin.app.apk`、`com.stv.plugin.tvlive.apk`），
+说明**插件不是独立安装的 App，而是被桌面当作嵌套 dex 加载的 APK**。
+
+### 3. 反查插件的契约
+
+把自带插件拉下来解包，看 `AndroidManifest.xml`：
+
+```bash
+adb pull /data/data/com.stv.launcher/files/plugins/com.stv.plugin.app.apk
+aapt2 dump badging com.stv.plugin.app.apk
+aapt2 dump xmltree --file AndroidManifest.xml com.stv.plugin.app.apk
+```
+
+关键就是这几个 meta-data：
+
+| 键 | 含义 | 示例值 |
+|---|---|---|
+| `ILePluginCreateApi` | 插件入口类（实现 `ILePluginCreateApi`） | `com.dsh.tvdesk.news.CreateApi` |
+| `widgetName` | 显示在 Tab 上的名字 | `新闻` |
+| `minDependentVersion` | 要求桌面 SDK 的最低版本 | `1.0.0` |
+| `dependentPackages` | 依赖的包（**必须声明**） | `com.stv.launcher.sdk;android.support.v4` |
+
+### 4. 桌面数据库
+
+```bash
+adb shell su -c 'sqlite3 /data/data/com.stv.launcher/databases/launcher_new.db \
+  "select TAG,NAME,PACKAGE_NAME,VERSION_CODE,SHOW_ON_TAB,SCREEN_ORDER from SCREEN_INFO"'
+```
+
+`SCREEN_INFO` 每行 = 一个 Tab：
+
+| 字段 | 作用 |
+|---|---|
+| `TAG` / `NAME` | Tab 标识与显示名 |
+| `PACKAGE_NAME` | 插件包名 |
+| `VERSION_CODE` | **必须与 APK 的 versionCode 一致**，否则桌面不重载插件 |
+| `SHOW_ON_TAB` | 1 = 显示在 Tab 栏；0 = 收进「桌面管理 → 待添加」 |
+| `SCREEN_ORDER` | Tab 顺序 |
+| `PLUGIN_STATE` | `available` 才会加载 |
+
+### 5. 第一次跑起来踩的坑
+
+| 报错 / 现象 | 原因 | 解法 |
+|---|---|---|
+| `start failed by newInstance error` | 缺 `dependentPackages` | 补上 `com.stv.launcher.sdk;android.support.v4` |
+| 插件不加载、Tab 空白 | 数据库 `VERSION_CODE` 与 APK 不一致 | 两边同步改 |
+| 改完没生效 | 桌面缓存旧 APK | `am force-stop com.stv.launcher` 后重开 |
+| Tab 自己消失 | 开了 `plugin_dev_mode`，启动时重扫并重置 `showOnTab` | 保持该开关为 `false` |
+| `minDependentVersion` 解析失败 | 版本号超过 3 段（如 `1.0.0.0`） | 只用 3 段：`1.0.0` |
+| 插件数据写到哪 | 桌面进程内运行，`getCacheDir()` 指向桌面的 cache | 见 `plugins_data/<包名>` |
+
+### 6. SDK 桩代码
+
+真实 SDK 拿不到，按插件 APK 的调用点还原出 4 个桩类即可编译：
+
+```
+com/stv/launcher/sdk/fragment/BaseFragment.java
+com/stv/launcher/sdk/plugin/ActivityActionHandler.java
+com/stv/launcher/sdk/plugin/api/ILePluginCreateApi.java
+android/support/v4/app/Fragment.java
+```
+
+桩只需要“能被编译”，运行时用的是桌面里真实的类 —— 这也是为什么插件 APK 里**不能**打包这些类。
+
 ## 已知限制
 
 - 仅在一台 X3-55 上验证，其他机型/固件可能不兼容（尤其桌面数据库结构）
@@ -323,9 +407,33 @@ cd plugin-news
 plugin-news/      新闻插件（源码 + 构建脚本 + SDK 桩）
 plugin-live/      直播插件
 plugin-douban/    豆瓣荐片插件
-plugin-restore/   电视端恢复工具
 docs/images/      截图
 tools-install_tab.sh  调试用：替换插件并重启桌面
+```
+
+## 关键词
+
+方便搜索引擎与 GitHub 检索命中（也是本仓库涉及的技术点）：
+
+```
+ILePluginCreateApi
+dependentPackages
+minDependentVersion
+widgetName
+com.stv.launcher
+launcher_new.db
+SCREEN_INFO
+SHOW_ON_TAB
+VERSION_CODE
+SCREEN_ORDER
+PLUGIN_STATE
+plugins_data
+plugin_dev_mode
+乐视 桌面 插件
+乐视电视 自定义 TAB
+Letv launcher plugin
+Android TV launcher plugin
+reverse engineering
 ```
 
 ## 许可
