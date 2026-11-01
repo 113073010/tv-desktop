@@ -163,38 +163,45 @@ EOF
 | 中文名乱码 | 文件存成了 GB2312 之外的编码，另存为 UTF-8 或 GBK |
 | 频道黑屏 | 源本身失效；rtsp 源需要 TVBox 的 IJK 内核，没有 TVBox 播不了 |
 | 改了没生效 | 退出直播页再进；仍不行就 `am force-stop com.stv.launcher` 后重开 |
-### 完全清除（卸干净）
+### 彻底卸载（clear.sh）
 
-想把这三个 TAB 彻底移除（插件、缓存、桌面里的 TAB 记录一起清），执行：
+要把这三个 TAB 从电视上**卸干净**（不留残留），执行：
 
 ```bash
 adb push release /data/local/tmp/tvrestore
 adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh'
 ```
 
-默认清除：
+清掉的东西：
 
-| 清什么 | 位置 |
+| 类别 | 具体位置 |
 |---|---|
-| 三个插件 APK | `/data/data/com.stv.launcher/files/plugins/{news,live,douban}.apk` |
-| 插件缓存 | `/data/data/com.stv.launcher/plugins_data/com.dsh.tvdesk.*` |
+| 插件 APK | `files/plugins/{news,live,douban}.apk` |
+| 插件数据 | `plugins_data/com.dsh.tvdesk.*` |
+| 插件偏好 | `shared_prefs/tvdesk_news.xml` 等 |
+| 插件缓存 | `cache/ijkdex`、`cache/tts*.mp3` |
+| 调试副本 | `/sdcard/plugin_dev/` |
+| 调试日志 | `/sdcard/tvdesk.log` |
 | 桌面 TAB 记录 | 用 `release/launcher_clean.db` 替换（三条记录已删除） |
 
-加 `--all` 还会删掉频道表和遗留备份：
+加 `--all` 连频道表和备份一起删：
 
 ```bash
 adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh --all'
 ```
 
 ```
-/sdcard/DIYP影音/                     ← 频道表
-/sdcard/launcher_new.before_*.db      ← 恢复/清除前后的数据库备份
+/sdcard/DIYP影音/                    ← 频道表
+/sdcard/launcher_new.before_*.db     ← 恢复/清除前后的数据库备份
 ```
 
-清除前会自动把当前数据库备份到 `/sdcard/launcher_new.before_clear.db`，
+脚本最后会做**残留检查**，逐项确认插件、数据、偏好、日志是否清干净，
+并报告频道表是保留还是已删除。
+
+清除前会自动备份当前数据库到 `/sdcard/launcher_new.before_clear.db`，
 想反悔就用 `restore.sh` 覆盖回去。
 
-清除后桌面应只剩 **信号源 / 应用**。
+清完后桌面只剩 **信号源 / 应用**。
 
 ### release/ 里有什么
 
@@ -203,7 +210,7 @@ adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh --all'
 | `news.apk` / `live.apk` / `douban.apk` | 三个插件（v50 / v24 / v46） |
 | `launcher_new.db` | 已登记三个 TAB 的桌面数据库 |
 | `restore.sh` | 设备端恢复脚本（幂等，自动备份原库到 `/sdcard/launcher_new.before_restore.db`） |
-| `clear.sh` | 完全清除脚本（删插件 + 删 TAB 记录，加 `--all` 连频道表一起删） |
+| `clear.sh` | 彻底卸载脚本（插件 + 数据 + 偏好 + 缓存 + 日志 + TAB 记录，加 `--all` 连频道表一起删） |
 | `launcher_clean.db` | 清除用的数据库（三个 TAB 记录已删除） |
 | `restore.bat` | Windows 双击运行（改里面的 `TV=` 为你的电视 IP） |
 | `SHA256SUMS.txt` | 校验和 |

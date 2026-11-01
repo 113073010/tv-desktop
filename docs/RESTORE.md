@@ -51,24 +51,35 @@ adb shell "sqlite3 /data/data/com.stv.launcher/databases/launcher_new.db \
 
 ---
 
-## 完全清除
+## 彻底卸载
 
-彻底移除三个 TAB（插件 + 缓存 + 桌面记录）：
+把三个 TAB 从电视上卸干净：
 
 ```bash
 adb push release /data/local/tmp/tvrestore
 adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh'
 ```
 
-加 `--all` 连频道表和遗留备份一起删：
+清除范围：
+
+| 类别 | 位置 |
+|---|---|
+| 插件 APK | `/data/data/com.stv.launcher/files/plugins/{news,live,douban}.apk` |
+| 插件数据 | `/data/data/com.stv.launcher/plugins_data/com.dsh.tvdesk.*` |
+| 插件偏好 | `/data/data/com.stv.launcher/shared_prefs/tvdesk_*.xml` |
+| 插件缓存 | `/data/data/com.stv.launcher/cache/{ijkdex,tts*.mp3}` |
+| 调试副本 | `/sdcard/plugin_dev/` |
+| 调试日志 | `/sdcard/tvdesk.log` |
+| 桌面记录 | 用 `release/launcher_clean.db` 替换 |
+
+加 `--all` 再删频道表与备份：
 
 ```bash
 adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh --all'
 ```
 
-清除前会备份数据库到 `/sdcard/launcher_new.before_clear.db`。
-脚本用 `release/launcher_clean.db`（已删除三条记录）替换原库，
-清完后桌面只剩 信号源 / 应用。
+脚本自带**残留检查**，结束时会逐项报告；清除前会把数据库备份到
+`/sdcard/launcher_new.before_clear.db`。
 
 ## 回滚
 
