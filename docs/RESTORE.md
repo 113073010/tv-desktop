@@ -51,29 +51,6 @@ adb shell "sqlite3 /data/data/com.stv.launcher/databases/launcher_new.db \
 
 ---
 
-## 方式 B：电视上点按（无需命令行）
-
-```bash
-adb install -r release/restore-lite.apk
-adb shell am start -n com.dsh.tvdesk.restore/.MainActivity
-```
-
-电视上会出现 4 个按钮，用遥控器：
-
-| 按钮 | 作用 |
-|---|---|
-| ① 安装依赖 | 安装 TVBox（若内置）+ 写入频道源到 `/sdcard/DIYP影音/` |
-| ② 恢复设置 | 写入三个插件 + 数据库，自动重启桌面 |
-| ③ 清除设置 | 删除插件 + 从数据库删除三个 TAB（先备份数据库） |
-| ④ 清除依赖 | 卸载 TVBox + 删除频道源 |
-
-首次运行弹 SuperSU，选「授权」。
-
-`restore-lite.apk` **不含** TVBox（避免二次分发第三方应用）；
-需要 TVBox 时自行安装到电视，按钮 ① 会自动跳过。
-
----
-
 ## 回滚
 
 恢复前脚本会把原数据库备份到 `/sdcard/launcher_new.before_restore.db`。
@@ -110,8 +87,9 @@ adb shell su -c 'am force-stop com.stv.launcher; am start -n com.stv.launcher/.a
 | `live.apk` | 直播插件 v24 |
 | `douban.apk` | 豆瓣荐片插件 v46 |
 | `launcher_new.db` | 桌面数据库（三个 TAB 已登记，版本号对齐） |
-| `restore-lite.apk` | 电视端图形化恢复工具（不含 TVBox，144KB） |
-| `restore.sh` | 设备端恢复脚本（方式 A 使用） |
+| `restore.sh` | 恢复脚本（方式 A 使用） |
+| `clear.sh` | 完全清除脚本（删插件、删 TAB 记录、可选删频道源） |
+| `launcher_clean.db` | 清除用的数据库（三个 TAB 记录已删除） |
 | `restore.bat` | Windows 端一键脚本（adb + root） |
 | `SHA256SUMS.txt` | 校验和 |
 

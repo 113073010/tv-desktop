@@ -16,7 +16,6 @@
 | 新闻 | `com.dsh.tvdesk.news` | 7 个分类的纯文字新闻 + 语音朗读 |
 | 直播 | `com.dsh.tvdesk.live` | 预览画面 + 2×5 频道墙，读 DIYP 格式频道表 |
 | 豆瓣荐片 | `com.dsh.tvdesk.douban` | 豆瓣海报墙，点击交给 TVBox 搜索播放 |
-| 恢复工具 | `com.dsh.tvdesk.restore` | 电视端一键安装依赖 / 恢复设置 / 清除 |
 
 ## 功能一览
 
@@ -75,26 +74,6 @@ adb shell su -c 'ls -l /data/data/com.stv.launcher/databases/launcher_new.db'
 
 期望：三个 APK 存在（权限 600，属主 system），数据库权限 660；桌面已自动重启，
 顶部 Tab 栏出现 **新闻 / 直播 / 豆瓣荐片**。
-
-### 方式 B：图形界面（遥控器操作）
-
-```bash
-adb install -r release/restore-lite.apk
-adb shell am start -n com.dsh.tvdesk.restore/.MainActivity
-```
-
-电视上用遥控器进入「**② 恢复设置**」，程序自动写入插件和数据库并重启桌面。
-
-界面共 4 个按钮：
-
-| 按钮 | 作用 |
-|---|---|
-| ① 安装依赖 | 写入频道源到 `/sdcard/DIYP影音/`（内置 TVBox 时一并安装） |
-| ② 恢复设置 | 写入三个插件 + 数据库，重启桌面 |
-| ③ 清除设置 | 删除插件并从数据库删除这三个 TAB（先备份数据库） |
-| ④ 清除依赖 | 卸载 TVBox、删除频道源 |
-
-首次运行会弹 SuperSU 授权框，选「授权」并勾选「记住选择」。
 
 ### 直播自定义源
 
@@ -167,7 +146,7 @@ EOF
 
 **方式三：恢复工具自动写入**
 
-`restore-lite.apk` 的「① 安装依赖」会把内置的 4 个频道表写入 `/sdcard/DIYP影音/`，
+仓库 `release/` 里没有频道表，恢复后按上面的格式自己写，或从备份目录拷贝，
 可以先用它铺底，再自己改。
 
 #### 默认播放哪个台
@@ -184,6 +163,39 @@ EOF
 | 中文名乱码 | 文件存成了 GB2312 之外的编码，另存为 UTF-8 或 GBK |
 | 频道黑屏 | 源本身失效；rtsp 源需要 TVBox 的 IJK 内核，没有 TVBox 播不了 |
 | 改了没生效 | 退出直播页再进；仍不行就 `am force-stop com.stv.launcher` 后重开 |
+### 完全清除（卸干净）
+
+想把这三个 TAB 彻底移除（插件、缓存、桌面里的 TAB 记录一起清），执行：
+
+```bash
+adb push release /data/local/tmp/tvrestore
+adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh'
+```
+
+默认清除：
+
+| 清什么 | 位置 |
+|---|---|
+| 三个插件 APK | `/data/data/com.stv.launcher/files/plugins/{news,live,douban}.apk` |
+| 插件缓存 | `/data/data/com.stv.launcher/plugins_data/com.dsh.tvdesk.*` |
+| 桌面 TAB 记录 | 用 `release/launcher_clean.db` 替换（三条记录已删除） |
+
+加 `--all` 还会删掉频道表和遗留备份：
+
+```bash
+adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh --all'
+```
+
+```
+/sdcard/DIYP影音/                     ← 频道表
+/sdcard/launcher_new.before_*.db      ← 恢复/清除前后的数据库备份
+```
+
+清除前会自动把当前数据库备份到 `/sdcard/launcher_new.before_clear.db`，
+想反悔就用 `restore.sh` 覆盖回去。
+
+清除后桌面应只剩 **信号源 / 应用**。
+
 ### release/ 里有什么
 
 | 文件 | 说明 |
@@ -191,7 +203,8 @@ EOF
 | `news.apk` / `live.apk` / `douban.apk` | 三个插件（v50 / v24 / v46） |
 | `launcher_new.db` | 已登记三个 TAB 的桌面数据库 |
 | `restore.sh` | 设备端恢复脚本（幂等，自动备份原库到 `/sdcard/launcher_new.before_restore.db`） |
-| `restore-lite.apk` | 电视端图形化工具（4 个按钮，144KB，**不含 TVBox**） |
+| `clear.sh` | 完全清除脚本（删插件 + 删 TAB 记录，加 `--all` 连频道表一起删） |
+| `launcher_clean.db` | 清除用的数据库（三个 TAB 记录已删除） |
 | `restore.bat` | Windows 双击运行（改里面的 `TV=` 为你的电视 IP） |
 | `SHA256SUMS.txt` | 校验和 |
 
@@ -217,7 +230,6 @@ EOF
 | 方式 | 适合场景 | 命令 |
 |---|---|---|
 | **命令行** | Agent / 有 adb 环境 | `adb push release /data/local/tmp/tvrestore` 后跑 `restore.sh` |
-| **电视端图形工具** | 遥控器操作 | `adb install -r release/restore-lite.apk` |
 | **Windows 脚本** | 双击省事 | `release/restore.bat` |
 | **手动** | 完全掌控 | 见下方说明 |
 
