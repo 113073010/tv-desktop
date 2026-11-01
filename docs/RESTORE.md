@@ -51,6 +51,25 @@ adb shell "sqlite3 /data/data/com.stv.launcher/databases/launcher_new.db \
 
 ---
 
+## 完全清除
+
+彻底移除三个 TAB（插件 + 缓存 + 桌面记录）：
+
+```bash
+adb push release /data/local/tmp/tvrestore
+adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh'
+```
+
+加 `--all` 连频道表和遗留备份一起删：
+
+```bash
+adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh --all'
+```
+
+清除前会备份数据库到 `/sdcard/launcher_new.before_clear.db`。
+脚本用 `release/launcher_clean.db`（已删除三条记录）替换原库，
+清完后桌面只剩 信号源 / 应用。
+
 ## 回滚
 
 恢复前脚本会把原数据库备份到 `/sdcard/launcher_new.before_restore.db`。
