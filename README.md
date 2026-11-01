@@ -42,29 +42,80 @@
 - 7×2 海报墙，横向滚动分页，默认 250 条高分片单
 - 点击海报 → 唤醒 TVBox 并触发搜索
 
-## 恢复 / 重装（给 Agent 或命令行）
+## 怎么用（Agent / 命令行）
 
-设备刷机、换机后想恢复这三个 TAB，**不需要重新编译**，直接用仓库里的 `release/` 目录：
+刷机、换机、或者只是想让别的 Agent 帮你装回来 —— **不需要编译**，`release/` 目录里就是全部所需文件。
+
+### 方式 A：命令行（Agent 最容易执行）
 
 ```bash
+# 1) 连接电视（IP 换成实际地址）
 adb connect 192.168.1.10:5555
-adb shell su -c id                      # 确认 uid=0(root)
+adb devices
+
+# 2) 确认 root（电视上可能弹 SuperSU，点「授权」）
+adb shell su -c id            # 期望：uid=0(root) gid=0(root)
+
+# 3) 把 release 目录推到电视
 adb push release /data/local/tmp/tvrestore
+
+# 4) 执行恢复脚本
 adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh'
 ```
 
-`release/` 里已包含：
+脚本会打印每一步结果，并校验三个 APK 和数据库是否就位。
+失败时返回具体错误码：`2` 缺文件、`3` 不是乐视桌面、`4` 插件复制失败、`5` 数据库替换失败。
+
+**执行完验证**
+
+```bash
+adb shell su -c 'ls -l /data/data/com.stv.launcher/files/plugins/'
+adb shell su -c 'ls -l /data/data/com.stv.launcher/databases/launcher_new.db'
+```
+
+期望：三个 APK 存在（权限 600，属主 system），数据库权限 660；桌面已自动重启，
+顶部 Tab 栏出现 **新闻 / 直播 / 豆瓣荐片**。
+
+### 方式 B：图形界面（遥控器操作）
+
+```bash
+adb install -r release/restore-lite.apk
+adb shell am start -n com.dsh.tvdesk.restore/.MainActivity
+```
+
+电视上用遥控器进入「**② 恢复设置**」，程序自动写入插件和数据库并重启桌面。
+
+界面共 4 个按钮：
+
+| 按钮 | 作用 |
+|---|---|
+| ① 安装依赖 | 写入频道源到 `/sdcard/DIYP影音/`（内置 TVBox 时一并安装） |
+| ② 恢复设置 | 写入三个插件 + 数据库，重启桌面 |
+| ③ 清除设置 | 删除插件并从数据库删除这三个 TAB（先备份数据库） |
+| ④ 清除依赖 | 卸载 TVBox、删除频道源 |
+
+首次运行会弹 SuperSU 授权框，选「授权」并勾选「记住选择」。
+
+### release/ 里有什么
 
 | 文件 | 说明 |
 |---|---|
 | `news.apk` / `live.apk` / `douban.apk` | 三个插件（v50 / v24 / v46） |
 | `launcher_new.db` | 已登记三个 TAB 的桌面数据库 |
-| `restore.sh` | 设备端恢复脚本（幂等，自动备份原库） |
-| `restore-lite.apk` | 电视端图形化工具（4 个按钮，不含 TVBox） |
-| `restore.bat` | Windows 双击运行 |
+| `restore.sh` | 设备端恢复脚本（幂等，自动备份原库到 `/sdcard/launcher_new.before_restore.db`） |
+| `restore-lite.apk` | 电视端图形化工具（4 个按钮，144KB，**不含 TVBox**） |
+| `restore.bat` | Windows 双击运行（改里面的 `TV=` 为你的电视 IP） |
 | `SHA256SUMS.txt` | 校验和 |
 
-详细步骤、验证命令、回滚方法见 **[docs/RESTORE.md](docs/RESTORE.md)**。
+### 关于 TVBox
+
+直播 TAB 的播放内核借用 TVBox（`com.github.tvbox.osc.tk`）。
+`release/` **不包含** TVBox（避免二次分发第三方应用）：
+
+- 已装 TVBox → 直接按上面步骤恢复，一切正常
+- 没装 → 恢复照样成功，但 rtsp / 4K 频道播不了（HLS / HTTP 可用）
+
+详细排查、回滚方法见 **[docs/RESTORE.md](docs/RESTORE.md)**。
 ## 快速开始
 
 ### 前提
@@ -73,20 +124,16 @@ adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh'
 - 电视已 **root**（插件安装需要写 `/data/data/com.stv.launcher/`）
 - 直播功能需要 **TVBox**（借用它的 IJK 播放内核）
 
-### 安装（三种方式）
+### 安装方式一览
 
-**A. 电视上一步到位（推荐）**
+| 方式 | 适合场景 | 命令 |
+|---|---|---|
+| **命令行** | Agent / 有 adb 环境 | `adb push release /data/local/tmp/tvrestore` 后跑 `restore.sh` |
+| **电视端图形工具** | 遥控器操作 | `adb install -r release/restore-lite.apk` |
+| **Windows 脚本** | 双击省事 | `release/restore.bat` |
+| **手动** | 完全掌控 | 见下方说明 |
 
-安装 `restore.apk` → 打开「TAB 恢复工具」：
-
-```
-① 安装依赖   安装内置 TVBox + 写入频道源
-② 恢复设置   写入三个插件 + 桌面数据库，自动重启桌面
-```
-
-**B. PC 脚本**：`restore.bat`（需要 adb + root）
-
-**C. 手动**：把 APK 放进 `/data/data/com.stv.launcher/files/plugins/`，
+**手动安装**：把 APK 放进 `/data/data/com.stv.launcher/files/plugins/`，
 并往 `launcher_new.db` 的 `SCREEN_INFO` 表插入对应记录
 
 ### 编译
