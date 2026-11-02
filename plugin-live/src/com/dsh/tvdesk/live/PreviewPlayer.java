@@ -8,6 +8,9 @@ import android.view.Surface;
  */
 public class PreviewPlayer {
 
+    /** true = 所有频道走系统 MediaPlayer（MediaCodec 硬解）；false = 走借来的 IJK */
+    private static final boolean USE_SYSTEM_PLAYER = false;
+
     public interface Listener {
         void onStatus(String text);
         /** 真实解码出来的画面尺寸 */
@@ -35,14 +38,14 @@ public class PreviewPlayer {
 
     public void setSurface(Surface surface) {
         mSurface = surface;
-        if (surface != null && mWanted != null && mPlayer == null) {
+        if (surface != null && mWanted != null && mPlayer == null && mSys == null) {
             open(mWanted);
         }
     }
 
     public void play(String url) {
         if (url == null) return;
-        if (url.equals(mWanted) && mPlayer != null) return;
+        if (url.equals(mWanted) && (mPlayer != null || mSys != null)) return;
         mWanted = url;
         if (mSurface == null) {
             status("等待画面就绪…");
@@ -55,6 +58,11 @@ public class PreviewPlayer {
 
     private void open(final String url) {
         releasePlayer();
+        if (USE_SYSTEM_PLAYER) {
+            status("连接中（系统播放器）…");
+            openSystem(url);
+            return;
+        }
         if (!IjkProxy.isReady()) {
             // 没装 TVBox（借不到 IJK）时，退回系统播放器；HLS/HTTP 可用，rtsp 多半不行
             status("无 IJK 内核，尝试系统播放器…");
@@ -126,14 +134,33 @@ public class PreviewPlayer {
             mSys.setDataSource(url);
             mSys.setOnPreparedListener(new android.media.MediaPlayer.OnPreparedListener() {
                 @Override public void onPrepared(android.media.MediaPlayer mp) {
-                    status("已就绪（系统播放器）");
+                    status("已就绪 " + mp.getVideoWidth() + "x" + mp.getVideoHeight());
                     if (mListener != null) mListener.onSize(mp.getVideoWidth(), mp.getVideoHeight());
                     try { mp.start(); } catch (Throwable t) { Diag.err("player", "sys start " + t); }
                 }
             });
             mSys.setOnErrorListener(new android.media.MediaPlayer.OnErrorListener() {
                 @Override public boolean onError(android.media.MediaPlayer mp, int what, int extra) {
-                    status("系统播放器失败 " + what + "/" + extra);
+                    if (!mTriedFallback) {
+                        mTriedFallback = true;
+                        status("直连失败 " + what + "，解析 smil…");
+                        final int token = mToken;
+                        final String src = url;
+                        new Thread(new Runnable() {
+                            @Override public void run() {
+                                final String resolved = StreamResolver.resolve(src);
+                                new android.os.Handler(android.os.Looper.getMainLooper()).post(
+                                        new Runnable() {
+                                            @Override public void run() {
+                                                if (token != mToken) return;
+                                                if (!resolved.equals(src)) open(resolved);
+                                            }
+                                        });
+                            }
+                        }, "tvdesk-resolve").start();
+                        return true;
+                    }
+                    status("播放失败 " + what + "/" + extra);
                     if (mListener != null) mListener.onError(what, extra);
                     return true;
                 }

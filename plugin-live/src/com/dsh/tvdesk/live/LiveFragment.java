@@ -151,12 +151,53 @@ public class LiveFragment extends BaseFragment {
                         || url.startsWith("rtmp") || url.startsWith("udp") || url.startsWith("igmp"))) {
                     continue;
                 }
-                out.add(new Channel(name, url));
+                out.add(new Channel(cleanName(name), url));
             }
         } catch (Throwable t) {
             Diag.err("load", "parse fail " + f + " " + t);
         }
         return out;
+    }
+
+    /**
+     * 清洗频道显示名：
+     *   高清 / 高清现网 / 超高清 / 现网 / 标清 / HD 这类后缀不是频道名的一部分，去掉；
+     *   4K 属于频道标识，保留并单独分隔。
+     */
+    private static final String[] NAME_SUFFIX = {
+            "高清现网", "超高清", "高清台", "高清", "标清", "超清", "现网", "HD", "hd"
+    };
+
+    private static String cleanName(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        boolean is4k = s.contains("4K") || s.contains("4k") || s.contains("超高清");
+
+        boolean changed = true;
+        while (changed && s.length() > 1) {
+            changed = false;
+            for (String d : NAME_SUFFIX) {
+                if (s.length() > d.length() && s.toLowerCase(Locale.US).endsWith(d.toLowerCase(Locale.US))) {
+                    s = s.substring(0, s.length() - d.length()).trim();
+                    changed = true;
+                }
+            }
+        }
+
+        s = s.replaceAll("\\s+", " ").trim();
+
+        // CCTV4 → CCTV-4
+        s = s.replaceAll("(?i)^CCTV(\\d)", "CCTV-$1");
+        // CCTV-16奥林匹克 → CCTV-16 奥林匹克
+        s = s.replaceAll("(?i)(CCTV[- ]?\\d+\\+?)([\\u4e00-\\u9fa5])", "$1 $2");
+        // 北京卫视4K → 北京卫视 4K
+        s = s.replaceAll("([\\u4e00-\\u9fa5])(\\d+[Kk])$", "$1 $2");
+        // 已经是 4K/超高清 但名字里没体现的，补上标识
+        if (is4k && !s.contains("4K") && !s.contains("4k")) {
+            s = s + " 4K";
+        }
+        s = s.replaceAll("\\s+", " ").trim();
+        return s;
     }
 
     /** 源文件编码不统一：先严格 UTF-8，失败再退回 GBK。 */

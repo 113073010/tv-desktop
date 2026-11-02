@@ -114,12 +114,32 @@ public class IjkProxy {
 
         /** 让 MStar 这颗弱芯片尽量省力：硬解优先、丢帧、低缓冲、RTSP 走 TCP */
         public void applyTvOptions() {
+            // ---- 解码 ----
             setOption(4, "mediacodec", 1);
             setOption(4, "mediacodec-all-videos", 1);
+            setOption(4, "mediacodec-handle-resolution-change", 1);
+            setOption(4, "mediacodec-sync", 0);
+
+            // ---- 渲染（4K 清晰度关键）----
+            // rv32 走 RGBA 直通，避免默认 YUV 转换带来的糊/色偏
+            setOption(4, "overlay-format", "fcc-rv32");
+            setOption(4, "enable-accuracy", 1);
+            setOption(4, "frame-queue-size", 3);
+
+            // ---- 网络与缓冲 ----
             setOption(4, "framedrop", 1);
             setOption(4, "packet-buffering", 0);
-            setOption(4, "max-buffer-size", 512 * 1024);
+            setOption(4, "max-buffer-size", 1024 * 1024);
+            setOption(4, "reconnect", 1);
+            setOption(4, "timeout", 15000);
+
+            // ---- ffmpeg 侧：4K HEVC 探测窗口要够大 ----
             setOption(1, "rtsp_transport", "tcp");
+            setOption(1, "stimeout", "15000000");
+            setOption(1, "probesize", "2000000");
+            setOption(1, "analyzeduration", "2000000");
+            setOption(1, "fflags", "nobuffer");
+            setOption(1, "max_delay", "500000");
         }
 
         private void setOption(int cat, String name, long value) {
