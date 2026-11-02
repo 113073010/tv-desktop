@@ -23,8 +23,10 @@ public class MinuteChart extends View {
     private final Paint pText = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private List<Float> mPrices;
+    private List<String> mLabels;
     private float mPrevClose;
     private boolean mStretch = false;   // true=按点数铺满宽度（历史曲线用）
+    private String mEmpty = "暂无分时数据";
     private float mDensity = 2f;
 
     public MinuteChart(Context c) {
@@ -46,14 +48,32 @@ public class MinuteChart extends View {
         mPrices = prices;
         mPrevClose = prevClose;
         mStretch = false;
+        mEmpty = "暂无分时数据";
         invalidate();
     }
 
     /** 历史曲线：铺满整宽，基线取首个点 */
     public void setHistory(List<Float> prices) {
+        setHistory(prices, null);
+    }
+
+    /** 历史曲线：带日期标签 */
+    public void setHistory(List<Float> prices, List<String> labels) {
         mPrices = prices;
+        mLabels = labels;
         mPrevClose = (prices != null && !prices.isEmpty()) ? prices.get(0) : 0f;
         mStretch = true;
+        mEmpty = "暂无走势数据";
+        invalidate();
+    }
+
+    /** 清空并显示占位文案（换标的等数据时用，避免残留上一条曲线） */
+    public void clear(String emptyText) {
+        mPrices = null;
+        mLabels = null;
+        mPrevClose = 0f;
+        mStretch = true;
+        mEmpty = emptyText == null ? "暂无走势数据" : emptyText;
         invalidate();
     }
 
@@ -69,7 +89,9 @@ public class MinuteChart extends View {
         }
 
         if (mPrices == null || mPrices.size() < 2 || mPrevClose <= 0f) {
-            cv.drawText("暂无分时数据", w / 2f - 40 * mDensity, h / 2f, pText);
+            pText.setColor(0xFF7C8494);
+            float tw = pText.measureText(mEmpty);
+            cv.drawText(mEmpty, (w - tw) / 2f, h / 2f, pText);
             return;
         }
 
@@ -85,6 +107,65 @@ public class MinuteChart extends View {
 
         int total = mStretch ? mPrices.size() : Math.max(240, mPrices.size());
         float stepX = w / (float) Math.max(1, total - 1);
+
+        if (mStretch) {
+            // 日K模式：整体单色+填充，底部留日期区
+            float dateH = 15 * mDensity;
+            float chartH = usableH - dateH;
+            float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
+            for (Float f : mPrices) { if (f < lo) lo = f; if (f > hi) hi = f; }
+            if (hi - lo < 0.01f) { hi += 0.01f; lo -= 0.01f; }
+            float range = hi - lo;
+            float baseY0 = pad + chartH;
+
+            Path line = new Path();
+            Path fill = new Path();
+            boolean started = false;
+            float lastX = 0;
+            for (int i = 0; i < mPrices.size(); i++) {
+                float price = mPrices.get(i);
+                float x = i * stepX;
+                float y = pad + (hi - price) / range * chartH;
+                if (!started) {
+                    line.moveTo(x, y);
+                    fill.moveTo(x, baseY0);
+                    fill.lineTo(x, y);
+                    started = true;
+                } else {
+                    line.lineTo(x, y);
+                    fill.lineTo(x, y);
+                }
+                lastX = x;
+            }
+
+            boolean up = mPrices.get(mPrices.size() - 1) >= mPrices.get(0);
+            int color = up ? UP : DOWN;
+
+            fill.lineTo(lastX, baseY0);
+            fill.close();
+            pFill.setColor((color & 0x00FFFFFF) | 0x33000000);
+            cv.drawPath(fill, pFill);
+
+            pLine.setStrokeWidth(2.5f);
+            pLine.setColor(color);
+            cv.drawPath(line, pLine);
+
+            // 日期标签：5个刻度（开始、1/4、1/2、3/4、结束）
+            if (mLabels != null && mLabels.size() == mPrices.size()) {
+                int n = mPrices.size();
+                float dateY = baseY0 + dateH - 3 * mDensity;
+                int[] idxs = new int[]{0, n / 4, n / 2, n * 3 / 4, n - 1};
+                for (int k = 0; k < idxs.length; k++) {
+                    String lab = mLabels.get(idxs[k]);
+                    float tx = idxs[k] * stepX;
+                    if (k == 0) tx = 0;
+                    else if (k == idxs.length - 1) tx = w - pText.measureText(lab);
+                    else tx -= pText.measureText(lab) / 2f;
+                    cv.drawText(lab, tx, dateY, pText);
+                }
+            }
+            return;
+        }
 
         Path line = new Path();
         Path fill = new Path();
@@ -118,7 +199,5 @@ public class MinuteChart extends View {
 
         pLine.setColor(color);
         cv.drawPath(line, pLine);
-
-        // 昨收数值已在右侧统计区展示，图内不再重复标注（避免压住曲线）
     }
 }

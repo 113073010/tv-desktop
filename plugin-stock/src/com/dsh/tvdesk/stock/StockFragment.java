@@ -53,17 +53,17 @@ public class StockFragment extends BaseFragment {
             "sh000688"    // 科创50
     };
 
-    /** 国际指数：恒生 / 国企 / 恒生科技 / 道指 / 纳指 / 标普 / 富时100 */
+    /** 国际指数：中国大陆 / 美国 / 日本 / 韩国 / 德国 / 英国 / 中国香港 / 中国台湾 / 印度 / 澳洲 */
     private static final String[][] WORLD_REGIONS = {
             {"中国大陆", "sh000300",     "沪深300"},
             {"美国",    "usINX",        "标普500"},
-            {"日本",    "int_nikkei",    "日经225"},
+            {"日本",    "znb_NKY",      "日经225"},
             {"韩国",    "znb_KOSPI",     "KOSPI"},
             {"德国",    "znb_DAX",       "DAX 40"},
-            {"英国",    "int_ftse",      "富时100"},
+            {"英国",    "znb_FTSE",      "富时100"},
             {"中国香港", "hkHSI",        "恒生指数"},
             {"中国台湾", "znb_TWSE",      "台湾加权"},
-            {"印度",    "znb_NIFTY",     "Nifty 50"},
+            {"印度",    "znb_SENSEX",   "SENSEX"},
             {"澳洲",    "znb_AS51",      "ASX 200"}
     };
 
@@ -75,14 +75,16 @@ public class StockFragment extends BaseFragment {
     private static final String WATCH_FILE = "/sdcard/tvdesk/自选.txt";
     private static final int ROWS = 10;
     private static final int ACCENT = 0xFF2674EE;
+    /** 日 K 在拉数据时的占位文案 */
+    private static final String LOADING_KLINE = "近一年日K 加载中…";
 
     private Context mCtx;
     private View mRoot;
     private int mDp = 2;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private final ExecutorService mPool = Executors.newFixedThreadPool(2);
-    /** 抓油价专用：31 个省分 4 路取，并发太高会被站点当爬虫（返回 404） */
-    private final ExecutorService mOilPool = Executors.newFixedThreadPool(4);
+    /** 抓油价专用：并发高一点，31 个省才能快 */
+    private final ExecutorService mOilPool = Executors.newFixedThreadPool(10);
 
     private TextView[] mChips = new TextView[TITLES.length];
     private TextView mTitle, mStatus;
@@ -124,6 +126,11 @@ public class StockFragment extends BaseFragment {
     private OilPrice.Oil mOil = null;
     /** 当前详情面板对应的代码，用于丢弃过期的分时回调 */
     private String mSelCode = null;
+    /** false=近一年日K（默认），true=当日分时；按「确定」切换 */
+    private boolean mMinuteMode = false;
+    /** 日 K 最后一根的 今开/最高/最低，缓存命中时补数据格用 */
+    private static final java.util.Map<String, float[]> KLINE_OHLC =
+            new java.util.HashMap<String, float[]>();
 
     // ================= 数据 =================
 
@@ -386,7 +393,7 @@ public class StockFragment extends BaseFragment {
             mOffset = 0;
             mFocus = 0;
             refreshRows();
-            if (mOilHead != null) mOilHead.setVisibility(View.VISIBLE);
+            applyHead(TAB_OIL);
             if (OilCache.fresh()) {
                 status("油价 " + hhmm(OilCache.newestAt()) + " 已取过 · 按「确定」刷新");
             } else {
@@ -411,7 +418,7 @@ public class StockFragment extends BaseFragment {
             }
             return;
         }
-        if (mOilHead != null && tab != TAB_OIL) mOilHead.setVisibility(View.GONE);
+        if (tab != TAB_OIL) applyHead(tab);
 
         final List<String> codes = codesForTab(tab);
         status("刷新中…");
@@ -431,16 +438,29 @@ public class StockFragment extends BaseFragment {
                         result.add(g);
                     }
                 } else if (tab == TAB_WORLD) {
-                    // 腾讯代码（A股/港股/美股）走腾讯，其余走新浪
+                    // 腾讯（A股/港股/美股）/ 新浪（其余国际）/ 东财（台股：新浪只有旧快照）
                     List<String> txCodes = new ArrayList<String>();
                     List<String> sinaCodes = new ArrayList<String>();
+                    List<String> emCodes = new ArrayList<String>();
                     for (String c : codes) {
-                        if (c.startsWith("int_") || c.startsWith("znb_")) sinaCodes.add(c);
+                        if ("znb_TWSE".equals(c)) emCodes.add(c);
+                        else if (c.startsWith("int_") || c.startsWith("znb_")) sinaCodes.add(c);
                         else txCodes.add(c);
                     }
                     List<QuoteApi.Item> raw = new ArrayList<QuoteApi.Item>();
                     if (!txCodes.isEmpty()) raw.addAll(QuoteApi.fetchStocks(txCodes));
                     if (!sinaCodes.isEmpty()) raw.addAll(QuoteApi.fetchSina(sinaCodes));
+                    for (String c : emCodes) {
+                        // 东财 secid 和日 K 用的是同一个，价格和曲线不会打架
+                        QuoteApi.Item tw = QuoteApi.fetchEastQuoteAuto("100.TWII", c, "台湾加权");
+                        if (tw.price > 0) {
+                            raw.add(tw);
+                        } else {
+                            List<QuoteApi.Item> fb = QuoteApi.fetchSina(
+                                    java.util.Collections.singletonList(c));
+                            raw.addAll(fb);
+                        }
+                    }
                     // 名称换成「地区 / 大盘名」，并按地区表顺序排列
                     List<QuoteApi.Item> ordered = new ArrayList<QuoteApi.Item>();
                     for (String[] r : WORLD_REGIONS) {
@@ -453,6 +473,14 @@ public class StockFragment extends BaseFragment {
                             }
                         }
                     }
+                    // 量额：东财批量接口一次取回（日经/DAX/印度/澳洲东财也没有，保持 --）
+                    List<String> secids = new ArrayList<String>();
+                    for (String[] r : WORLD_REGIONS) {
+                        String sid = QuoteApi.worldSecid(r[1]);
+                        if (sid != null) secids.add(sid);
+                    }
+                    java.util.Map<String, float[]> vols = QuoteApi.fetchEastVolumes(secids);
+                    for (QuoteApi.Item it : ordered) fillWorldVolume(it, vols);
                     result = ordered;
                 } else if (tab == TAB_FUND) {
                     List<QuoteApi.Item> raw = QuoteApi.fetchFunds(new ArrayList<String>(mFunds));
@@ -628,8 +656,9 @@ public class StockFragment extends BaseFragment {
     private View buildLeft(Context ctx) {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
+        // 左栏只放"名字 + 价格 + 涨幅"，1.0 已经够宽；油价表 4 个价位列仍放得下
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.MATCH_PARENT, 1.1f);
+                ViewGroup.LayoutParams.MATCH_PARENT, 1.0f);
         lp.rightMargin = dp(14);
         box.setLayoutParams(lp);
         box.setPadding(dp(12), dp(10), dp(12), dp(8));
@@ -641,7 +670,7 @@ public class StockFragment extends BaseFragment {
         head.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hlp.bottomMargin = dp(8);
+        hlp.bottomMargin = dp(4);
         head.setLayoutParams(hlp);
 
         mTitle = new TextView(ctx);
@@ -658,7 +687,7 @@ public class StockFragment extends BaseFragment {
         mOilHead.setVisibility(View.GONE);
         LinearLayout.LayoutParams ohlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        ohlp.bottomMargin = dp(4);
+        ohlp.bottomMargin = dp(2);
         ohlp.leftMargin = dp(10);
         ohlp.rightMargin = dp(10);
         mOilHead.setLayoutParams(ohlp);
@@ -666,7 +695,7 @@ public class StockFragment extends BaseFragment {
         for (int c = 0; c < cols.length; c++) {
             TextView h = new TextView(ctx);
             h.setText(cols[c]);
-            h.setTextSize(14f);
+            h.setTextSize(13f);
             h.setTextColor(0xFF9AA4B4);
             h.setGravity(c == 0 ? Gravity.START : Gravity.END);
             LinearLayout.LayoutParams hlp2 = (c == 0)
@@ -677,13 +706,39 @@ public class StockFragment extends BaseFragment {
         }
         box.addView(mOilHead);
 
+        // 其它分类的表头：名称 / 现价 / 涨跌幅（文案按分栏在 bindTab 里改）
+        mStockHead = new LinearLayout(ctx);
+        mStockHead.setOrientation(LinearLayout.HORIZONTAL);
+        mStockHead.setVisibility(View.GONE);
+        LinearLayout.LayoutParams shlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        shlp.bottomMargin = dp(2);
+        shlp.leftMargin = dp(10);
+        shlp.rightMargin = dp(10);
+        mStockHead.setLayoutParams(shlp);
+        String[] scol = {"名称", "现价", "涨跌幅"};
+        int[] swidth = {0, dp(72), dp(76)};
+        for (int c = 0; c < scol.length; c++) {
+            TextView h = new TextView(ctx);
+            h.setText(scol[c]);
+            h.setTextSize(13f);
+            h.setTextColor(0xFF9AA4B4);
+            h.setGravity(c == 0 ? Gravity.START : Gravity.END);
+            LinearLayout.LayoutParams hlp2 = (c == 0)
+                    ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    : new LinearLayout.LayoutParams(swidth[c], ViewGroup.LayoutParams.WRAP_CONTENT);
+            h.setLayoutParams(hlp2);
+            mStockHead.addView(h);
+        }
+        box.addView(mStockHead);
+
         for (int i = 0; i < ROWS; i++) {
             final int slot = i;
             LinearLayout row = new LinearLayout(ctx);
             row.setOrientation(LinearLayout.VERTICAL);
             row.setLayoutParams(new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-            row.setPadding(dp(10), dp(3), dp(10), dp(3));
+            row.setPadding(dp(10), dp(2), dp(10), dp(2));
             row.setFocusable(true);
             row.setClickable(true);
             row.setBackground(rowBg(false));
@@ -744,6 +799,10 @@ public class StockFragment extends BaseFragment {
             row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override public void onFocusChange(View v, boolean has) {
                     v.setBackground(rowBg(has));
+                    // 选中行是蓝底，副标题的深灰看不清，跟着变白
+                    if (mCodes[slot] != null) {
+                        mCodes[slot].setTextColor(has ? 0xCCFFFFFF : 0xFF6C7486);
+                    }
                     if (has) {
                         mFocus = mOffset + slot;
                         selectRow(mFocus, false);
@@ -785,6 +844,7 @@ public class StockFragment extends BaseFragment {
             }
         });
         mRightBox = box;
+
 
         dName = new TextView(ctx);
         dName.setTextSize(25f);
@@ -919,10 +979,34 @@ public class StockFragment extends BaseFragment {
 
     // ================= 状态 =================
 
+    /** 表头：油价 5 列，其余分类 3 列（名称 / 现价 / 涨跌幅） */
+    private void applyHead(int tab) {
+        boolean oil = tab == TAB_OIL;
+        if (mOilHead != null) mOilHead.setVisibility(oil ? View.VISIBLE : View.GONE);
+        if (mStockHead == null) return;
+        mStockHead.setVisibility(oil ? View.GONE : View.VISIBLE);
+        if (oil) return;
+        String name, price, pct;
+        if (tab == TAB_WORLD) { name = "地区"; price = "现价"; pct = "涨跌幅"; }
+        else if (tab == TAB_FUND) { name = "基金"; price = "单位净值"; pct = "日涨幅"; }
+        else if (tab == TAB_INDEX) { name = "指数"; price = "现价"; pct = "涨跌幅"; }
+        else { name = "名称"; price = "现价"; pct = "涨跌幅"; }
+        setHeadText(0, name);
+        setHeadText(1, price);
+        setHeadText(2, pct);
+    }
+
+    private void setHeadText(int idx, String text) {
+        if (idx < mStockHead.getChildCount()) {
+            ((TextView) mStockHead.getChildAt(idx)).setText(text);
+        }
+    }
+
     private void bindTab(int tab) {
         mTab = tab;
         mOffset = 0;
         mFocus = 0;
+        mMinuteMode = false;      // 换分栏一律回到日 K
         mItems.clear();
         if (tab == TAB_OIL) mTitle.setText("各省油价");
         else if (tab == TAB_GOLD) mTitle.setText("黄金 · 贵金属");
@@ -930,6 +1014,7 @@ public class StockFragment extends BaseFragment {
         else if (tab == TAB_WORLD) mTitle.setText("国际指数");
         else if (tab == TAB_FUND) mTitle.setText("我的基金");
         else mTitle.setText("我的自选");
+        applyHead(tab);
         refreshRows();
         for (int i = 0; i < mChips.length; i++) {
             mChips[i].setBackground(chipBg(i, mChips[i].isFocused()));
@@ -938,7 +1023,7 @@ public class StockFragment extends BaseFragment {
         loadData();
     }
 
-    /** 刷新当前分类；油价只有手动按「确定」才会真的重抓 */
+    /** 刷新当前分类；油价要清缓存才会真正重抓 */
     private void doRefresh() {
         if (mTab == TAB_OIL) {
             if (mOilLoading) { status("正在刷新全国油价… 稍等"); return; }
@@ -1025,6 +1110,8 @@ public class StockFragment extends BaseFragment {
     private void selectRow(int index, boolean loadChart) {
         if (index < 0 || index >= mItems.size()) return;
         QuoteApi.Item it = mItems.get(index);
+        // 换了一只标的就回到日 K；同一只来回移焦点时保留用户切过的分时
+        if (mSelCode == null || !mSelCode.equals(it.code)) mMinuteMode = false;
         mSelCode = it.code;
 
         // ---- 「＋ 添加基金」----
@@ -1102,77 +1189,117 @@ public class StockFragment extends BaseFragment {
             return;
         }
 
-        boolean overseas = isOverseas(it.code);   // 美股 / 富时：无分时，成交量字段也不可用
-        boolean aShare = isAShare(it.code);       // 只有 A 股的时间与成交量字段可信
-        dName.setText(it.name);
-        if (aShare) {
-            dCode.setText(it.displayCode + "   " + fmtTime(it.time));
-        } else {
-            dCode.setText(it.displayCode);        // 港股/美股时间字段格式各异，只显示代码
-        }
-        dPrice.setText(fmt(it.price, it.fund));
-        dPrice.setTextColor(colorOf(it.pct));
-        dChange.setText((it.change >= 0 ? "+" : "") + fmt(it.change, it.fund));
-        dChange.setTextColor(colorOf(it.pct));
-        dPct.setText(pctText(it.pct));
-        dPct.setTextColor(colorOf(it.pct));
-
+        // ---- 股票 / 指数：默认近一年日 K，按「确定」切当日分时 ----
         if (it.fund) {
-            // 基金：近一年单位净值走势
+            dName.setText(it.name);
+            dCode.setText(it.displayCode == null ? "" : it.displayCode);
+            dPrice.setText(fmt(it.price, true));
+            dPrice.setTextColor(colorOf(it.pct));
+            dChange.setText((it.change >= 0 ? "+" : "") + fmt(it.change, true));
+            dChange.setTextColor(colorOf(it.pct));
+            dPct.setText(pctText(it.pct));
+            dPct.setTextColor(colorOf(it.pct));
             dChart.setVisibility(View.GONE);
             mHistory.setVisibility(View.VISIBLE);
             mHistory.setData(null, null);
             mChartHint.setVisibility(View.GONE);
             setStats(new String[]{"净值日期", it.navDate, "日涨幅", pctText(it.pct),
                     "单位净值", fmt(it.price, true), "", "", "", ""});
-            dMeta.setText("");
+            dMeta.setText("数据来源：天天基金");
             loadFundHistory(it.code);
-        } else if (isGlobalIndex(it.code)) {
-            // 国际指数：新浪只有行情，用近一年日 K
-            dChart.setVisibility(View.GONE);
-            mHistory.setVisibility(View.VISIBLE);
-            mHistory.setData(null, null);
-            mChartHint.setVisibility(View.GONE);
-            setStats(new String[]{"现价", fmt(it.price, false),
-                    "涨跌", (it.change >= 0 ? "+" : "") + fmt(it.change, false),
-                    "涨跌幅", pctText(it.pct), "", "", "", ""});
-            dMeta.setText("");
-            loadStockHistory(it.code);
-        } else if (overseas || !aShare) {
-            // 港股 / 美股 / 日股 / 韩股 / 英股：给近一年日 K 曲线
-            dChart.setVisibility(View.GONE);
-            mHistory.setVisibility(View.VISIBLE);
-            mHistory.setData(null, null);
-            mChartHint.setVisibility(View.GONE);
-            setStats(new String[]{"今开", fmt(it.open, false), "昨收", fmt(it.prevClose, false),
-                    "最高", fmt(it.high, false), "最低", fmt(it.low, false),
-                    "", "", "", ""});
-            dMeta.setText("");
-            loadStockHistory(it.code);
-        } else {
-            dChart.setVisibility(View.VISIBLE);
-            mHistory.setVisibility(View.GONE);
-            mChartHint.setVisibility(View.GONE);
-            setStats(new String[]{"今开", fmt(it.open, false), "昨收", fmt(it.prevClose, false),
-                    "最高", fmt(it.high, false), "最低", fmt(it.low, false),
-                    "成交量", it.volTxt, "成交额", it.amtTxt});
-            dMeta.setText("");
-            // 换了一只就立刻清掉旧曲线并重新取分时，避免张冠李戴
-            dChart.setData(null, it.prevClose);
+            return;
+        }
+        showStockDetail(it);
+    }
+
+    /**
+     * 股票 / 指数详情：国内、国际、自选三个分栏共用这一套排版
+     * · 默认：近一年日 K（带日期刻度）
+     * · 选中后按「确定」：切当日分时，再按一次切回日 K
+     */
+    private void showStockDetail(final QuoteApi.Item it) {
+        dName.setText(it.name);
+        String sub = it.displayCode == null ? "" : it.displayCode;
+        String t = fmtTime(it.time);
+        String mode = mMinuteMode ? "分时" : "日K";
+        dCode.setText(t.length() > 0 ? sub + "   " + t + "   · " + mode : sub + "   · " + mode);
+
+        dPrice.setText(fmt(it.price, false));
+        dPrice.setTextColor(colorOf(it.pct));
+        dChange.setText((it.change >= 0 ? "+" : "") + fmt(it.change, false));
+        dChange.setTextColor(colorOf(it.pct));
+        dPct.setText(pctText(it.pct));
+        dPct.setTextColor(colorOf(it.pct));
+
+        dChart.setVisibility(View.VISIBLE);
+        mHistory.setVisibility(View.GONE);
+        mChartHint.setVisibility(View.GONE);
+
+        boolean cn = isAShare(it.code);   // 只有沪深市场的量额单位可信
+        // 国际：量额来自东财批量接口，按各市场单位显示；国内/自选：只有沪深显示量额
+        String vol = (mTab == TAB_WORLD) ? it.volTxt : (cn ? it.volTxt : "--");
+        String amt = (mTab == TAB_WORLD) ? it.amtTxt : (cn ? it.amtTxt : "--");
+        setStats(new String[]{"今开", fmt(it.open, false), "昨收", fmt(it.prevClose, false),
+                "最高", fmt(it.high, false), "最低", fmt(it.low, false),
+                "成交量", vol, "成交额", amt});
+
+        String src;
+        if (mTab == TAB_WORLD) src = "数据来源：腾讯 / 新浪 / 东方财富";
+        else if (mTab == TAB_INDEX) src = "数据来源：腾讯行情";
+        else src = cn ? "数据来源：腾讯行情" : "数据来源：腾讯 / 东方财富";
+        dMeta.setText(src + " · 按「确定」切换 日K / 分时");
+
+        if (mMinuteMode) {
+            dChart.clear("分时加载中…");
             loadMinute(it.code, it.prevClose);
+        } else {
+            dChart.clear(LOADING_KLINE);
+            loadStockHistory(it.code, true);
         }
     }
 
-    /** 美股 / 欧洲指数：腾讯只给行情，没有分时，成交量字段也错位 */
-    private static boolean isOverseas(String code) {
-        if (code == null) return false;
-        return code.startsWith("us") || code.startsWith("uk");
+    /** 「确定」键：近一年日 K ⇄ 当日分时 */
+    private void toggleStockChart() {
+        if (mTab != TAB_INDEX && mTab != TAB_WORLD && mTab != TAB_WATCH) return;
+        if (mFocus < 0 || mFocus >= mItems.size()) return;
+        QuoteApi.Item it = mItems.get(mFocus);
+        if (it == null || it.fund || it.kind != 0) return;   // 基金 / 油价 / 黄金 / 添加行不切
+        mMinuteMode = !mMinuteMode;
+        if (mSelCode == null || !mSelCode.equals(it.code)) mSelCode = it.code;
+        showStockDetail(it);
     }
 
-    /** 国际指数（新浪 int_/znb_ 前缀） */
-    private static boolean isGlobalIndex(String code) {
-        if (code == null) return false;
-        return code.startsWith("int_") || code.startsWith("znb_");
+    /** 把东财批量返回的量额填进国际那一行（没有的就保持 --） */
+    private void fillWorldVolume(QuoteApi.Item it, java.util.Map<String, float[]> vols) {
+        it.volTxt = "--";
+        it.amtTxt = "--";
+        String sid = QuoteApi.worldSecid(it.code);
+        if (sid == null) return;
+        float[] v = vols.get(sid);
+        if (v == null) return;
+        if (v[0] > 0f) it.volTxt = worldVolText(it.code, v[0]);
+        if (v[1] > 0f) it.amtTxt = worldAmtText(it.code, v[1]);
+    }
+
+    /**
+     * 成交量文案：国际这一栏统一「亿股」，方便各地区横向比大小
+     * · 沪深接口给的是手，1 手 = 100 股，先换成股
+     * · 东财给 KOSPI 的是千股
+     */
+    private static String worldVolText(String code, float v) {
+        if (isAShare(code)) v *= 100f;               // 手 → 股
+        else if ("znb_KOSPI".equals(code)) v *= 1000f;   // 千股 → 股
+        return String.format(Locale.US, "%.2f亿股", v / 100000000f);
+    }
+
+    /** 成交额文案：沪深/港股/台股三家有，各自本币 */
+    private static String worldAmtText(String code, float v) {
+        if (isAShare(code)) return QuoteApi.fmtAmt(v / 10000f) + "元";   // 元
+        String unit;
+        if ("hkHSI".equals(code)) unit = "亿港元";
+        else if ("znb_TWSE".equals(code)) unit = "亿新台币";
+        else return "--";
+        return String.format(Locale.US, "%.2f%s", v / 100000000f, unit);
     }
 
     /** A 股（沪/深）：时间与成交量字段可信 */
@@ -1221,7 +1348,6 @@ public class StockFragment extends BaseFragment {
                             mHistory.setVisibility(View.VISIBLE);
                             mChartHint.setVisibility(View.GONE);
                             mHistory.setData(list, labels);
-                            dMeta.setText("");
                         } else {
                             mHistory.setVisibility(View.GONE);
                             mChartHint.setVisibility(View.VISIBLE);
@@ -1233,44 +1359,108 @@ public class StockFragment extends BaseFragment {
         });
     }
 
-    /** 港股 / 美股 / 日股等的近一年日 K 曲线 */
-    private void loadStockHistory(final String code) {
+    /** 腾讯代码 → 东财 secid（防腾讯限流的备用源） */
+    private static String tencentToEastmoney(String code) {
+        if (code == null) return null;
+        if (code.startsWith("sh")) return "1." + code.substring(2);
+        if (code.startsWith("sz")) return "0." + code.substring(2);
+        if (code.startsWith("hk")) return "116." + code.substring(2);
+        if (code.startsWith("us")) return "105." + code.substring(2);
+        return null;
+    }
+
+    /** 近一年日 K 曲线：A 股 / 港股 / 美股 / 国际指数 / 自选 共用 */
+    private void loadStockHistory(final String code, final boolean fillStats) {
         if (code == null) return;
+        if (mMinuteMode) return;      // 当前是分时视图，不要再塞日K
         Diag.log("kline", "loadStockHistory " + code);
         final String key = "sk@" + code;
         final java.util.List<Float> cached = HistoryCache.get(key);
         if (cached != null && cached.size() > 5) {
-            mHistory.setData(cached, HistoryCache.getLabels(key));
+            dChart.setVisibility(View.VISIBLE);
+            mHistory.setVisibility(View.GONE);
+            mChartHint.setVisibility(View.GONE);
+            dChart.setHistory(cached, HistoryCache.getLabels(key));
+            if (fillStats) {
+                float[] o = KLINE_OHLC.get(key);
+                if (o != null) {
+                    fillStat("今开", o[0]);
+                    fillStat("最高", o[1]);
+                    fillStat("最低", o[2]);
+                }
+            }
             return;
         }
         mPool.execute(new Runnable() {
             @Override public void run() {
-                final QuoteApi.Series series = QuoteApi.fetchTencentKline(code, 250);
+                QuoteApi.Series series = null;
+                // 优先用东财映射（国际指数、港股指数、A股指数）
+                String emSecid = QuoteApi.worldSecid(code);
+                if (emSecid != null) {
+                    series = QuoteApi.fetchKline(emSecid, code, 250);
+                }
+                // 东财没取到，试腾讯
+                if (series == null || series.values.size() < 5) {
+                    series = QuoteApi.fetchTencentKline(code, 250);
+                }
+                // 腾讯也没取到，试东财个股映射
+                if (series == null || series.values.size() < 5) {
+                    String secid = tencentToEastmoney(code);
+                    if (secid != null) {
+                        series = QuoteApi.fetchKline(secid, code, 250);
+                    }
+                }
+                final QuoteApi.Series got = series;
                 final java.util.List<Float> list = series == null ? null : series.values;
                 final java.util.List<String> labels = series == null ? null : series.labels;
-                if (list != null && list.size() > 5) HistoryCache.put(key, list, labels);
+                if (list != null && list.size() > 5) {
+                    HistoryCache.put(key, list, labels);
+                    if (got != null && got.lastHigh > 0f) {
+                        KLINE_OHLC.put(key, new float[]{got.lastOpen, got.lastHigh, got.lastLow});
+                    }
+                }
                 mMain.post(new Runnable() {
                     @Override public void run() {
+                        if (mSelCode == null || !mSelCode.equals(code)) return;   // 已切到别的标的
+                        if (mMinuteMode) return;                                  // 已切到分时
                         if (list != null && list.size() > 5) {
-                            mHistory.setVisibility(View.VISIBLE);
                             mChartHint.setVisibility(View.GONE);
-                            mHistory.setData(list, labels);
-                            dMeta.setText("");
+                            mHistory.setVisibility(View.GONE);
+                            dChart.setVisibility(View.VISIBLE);
+                            dChart.setHistory(list, labels);
+                            if (fillStats) fillStatsFromKline(got);
                         } else {
                             mHistory.setVisibility(View.GONE);
+                            dChart.setVisibility(View.GONE);
                             mChartHint.setVisibility(View.VISIBLE);
-                            if (code.startsWith("int_") || code.startsWith("znb_")) {
-                                mChartHint.setText("该地区指数暂无可用的历史曲线\n（数据源只提供实时行情）");
-                                dMeta.setText("");
-                            } else {
-                                mChartHint.setText("没取到历史行情");
-                                dMeta.setText("");
-                            }
+                            mChartHint.setText("没取到历史行情");
+                            dMeta.setText("");
                         }
                     }
                 });
             }
         });
+    }
+
+    /** 行情接口没给今开/最高/最低时，用日 K 最后一根补上（国际指数常见） */
+    private void fillStatsFromKline(QuoteApi.Series s) {
+        if (s == null) return;
+        fillStat("今开", s.lastOpen);
+        fillStat("最高", s.lastHigh);
+        fillStat("最低", s.lastLow);
+    }
+
+    /** 只填空缺的格子，行情里已有的值不覆盖 */
+    private void fillStat(String key, float v) {
+        if (v <= 0f) return;
+        for (int i = 0; i < dStatKey.length; i++) {
+            if (dStatKey[i] == null || !key.contentEquals(dStatKey[i].getText())) continue;
+            CharSequence cur = dStatVal[i].getText();
+            if (cur == null || cur.length() == 0 || "--".contentEquals(cur)) {
+                dStatVal[i].setText(fmt(v, false));
+            }
+            return;
+        }
     }
 
     /** 黄金近一年日 K 曲线 */
@@ -1485,7 +1675,6 @@ public class StockFragment extends BaseFragment {
             @Override public void run() {
                 final OilPrice.Oil oil = OilPrice.fetch(name, slug);
                 OilCache.put(slug, oil);
-                OilCache.flush();
                 mMain.post(new Runnable() {
                     @Override public void run() {
                         if (!("oil:" + slug).equals(mSelCode)) return;
@@ -1601,8 +1790,9 @@ public class StockFragment extends BaseFragment {
                 final QuoteApi.Minute m = QuoteApi.fetchMinute(code);
                 mMain.post(new Runnable() {
                     @Override public void run() {
-                        // 期间用户可能已切到别的股票，过期结果直接丢弃
+                        // 期间用户可能已切到别的股票 / 切回日K，过期结果直接丢弃
                         if (code == null || !code.equals(mSelCode)) return;
+                        if (!mMinuteMode) return;
                         // 指数分时接口里的「昨收」字段不可靠，行情里的昨收更准
                         float prev = fallbackPrev > 0f ? fallbackPrev : m.prevClose;
                         dChart.setData(m.prices, prev);
@@ -1627,13 +1817,29 @@ public class StockFragment extends BaseFragment {
         return 0xFFAAB0BC;
     }
 
+    /**
+     * 时间统一成「MM-DD HH:mm」
+     * 兼容 20261102161412 / 2026-11-02 13:56:19 / 2026/11/02 18:31:13
+     */
     private static String fmtTime(String raw) {
         if (raw == null) return "";
         String s = raw.trim();
-        if (s.length() >= 12) {
+        if (s.length() == 0) return "";
+        if (s.matches("\\d{12,14}")) {
             return s.substring(4, 6) + "-" + s.substring(6, 8) + " " + s.substring(8, 10) + ":" + s.substring(10, 12);
         }
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})[ T](\\d{1,2}):(\\d{2})")
+                .matcher(s);
+        if (m.find()) {
+            return pad2(m.group(2)) + "-" + pad2(m.group(3)) + " " + pad2(m.group(4)) + ":" + m.group(5);
+        }
+        if (s.matches("\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}")) return s.substring(5).replace('/', '-');
         return s;
+    }
+
+    private static String pad2(String v) {
+        return v.length() >= 2 ? v : "0" + v;
     }
 
     private void status(final String s) {
@@ -1698,11 +1904,21 @@ public class StockFragment extends BaseFragment {
                     }
                     return true;
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    // 右键进右侧详情区；在那里按「确定」切 日K / 分时
+                    if (mRightBox != null) mRightBox.requestFocus();
+                    return true;
+
                 case KeyEvent.KEYCODE_DPAD_LEFT:
-                    // 左区在任何分类里都往右区送焦点：以前 RIGHT 只认分时图，
-                    // 而分时图在油价/基金/国际这些分类是隐藏的，按了没反应
-                    if (mRightBox != null && mRightBox.requestFocus()) return true;
-                    if (mChips[mTab] != null) mChips[mTab].requestFocus();
+                    if (mOffset == 0 && mFocus == 0) {
+                        if (mChips[mTab] != null) mChips[mTab].requestFocus();
+                    } else {
+                        mOffset = 0;
+                        mFocus = 0;
+                        refreshRows();
+                        selectRow(0, true);
+                        if (mRowsV[0] != null) mRowsV[0].requestFocus();
+                    }
+
                     return true;
                 case KeyEvent.KEYCODE_BACK:
                     if (mChips[mTab] != null) mChips[mTab].requestFocus();
@@ -1734,6 +1950,7 @@ public class StockFragment extends BaseFragment {
                 }
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
+                    toggleStockChart();      // 日 K ⇄ 当日分时
                     return true;
                 default:
                     return false;

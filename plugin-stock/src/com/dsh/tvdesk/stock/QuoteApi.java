@@ -242,6 +242,23 @@ public class QuoteApi {
         if (c.startsWith("hk")) return "100." + code.substring(2).toUpperCase(java.util.Locale.US);
         if (c.startsWith("sh")) return "1." + code.substring(2).toUpperCase(java.util.Locale.US);
         if (c.startsWith("sz")) return "0." + code.substring(2).toUpperCase(java.util.Locale.US);
+        // 国际指数：新浪代码 → 东财 secid
+        return worldSecid(code);
+    }
+
+    // 新浪/腾讯国际指数代码 → 东财 secid（全项目唯一一份，StockFragment 也调这里）
+    static String worldSecid(String code) {
+        if (code == null) return null;
+        if (code.equals("int_nikkei") || code.equals("znb_NKY")) return "100.N225";
+        if (code.equals("znb_KOSPI")) return "100.KS11";
+        if (code.equals("znb_DAX")) return "100.GDAXI";
+        if (code.equals("int_ftse") || code.equals("znb_FTSE")) return "100.FTSE";
+        if (code.equals("znb_TWSE")) return "100.TWII";
+        if (code.equals("znb_SENSEX") || code.equals("znb_NIFTY")) return "100.SENSEX";
+        if (code.equals("znb_AS51")) return "100.AORD";
+        if (code.equals("usINX")) return "100.SPX";
+        if (code.equals("hkHSI")) return "100.HSI";
+        if (code.equals("sh000300")) return "1.000300";
         return null;
     }
 
@@ -383,19 +400,118 @@ public class QuoteApi {
         return it;
     }
 
+    /**
+     * 东财批量行情：一次拿回多个指数的 现价/成交量/成交额（f2/f5/f6）
+     * 国际分类的量额只有东财给，且只有部分市场有，返回 secid → {成交量, 成交额}
+     */
+    static java.util.Map<String, float[]> fetchEastVolumes(java.util.List<String> secids) {
+        java.util.Map<String, float[]> out = new java.util.HashMap<String, float[]>();
+        if (secids == null || secids.isEmpty()) return out;
+        StringBuilder sb = new StringBuilder();
+        for (String s : secids) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(s);
+        }
+        try {
+            String url = "http://push2.eastmoney.com/api/qt/ulist.np/get?fltt=1&secids=" + sb
+                    + "&fields=f2,f5,f6,f12,f13,f14";
+            byte[] raw = fetch(url, "https://quote.eastmoney.com/", 8000);
+            JSONObject root = new JSONObject(new String(raw, "UTF-8"));
+            JSONObject data = root.optJSONObject("data");
+            if (data == null) return out;
+            JSONArray arr = data.optJSONArray("diff");
+            if (arr == null) return out;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String code = o.optString("f12");
+                if (code == null || code.length() == 0) continue;
+                String secid = (o.optInt("f13", 0) == 1 ? "1." : "100.") + code;
+                double v = o.optDouble("f5", 0);
+                double a = o.optDouble("f6", 0);
+                if (v <= 0 && a <= 0) continue;
+                out.put(secid, new float[]{(float) v, (float) a});
+            }
+            Diag.log("emvol", "n=" + out.size() + "/" + secids.size());
+        } catch (Throwable t) {
+            Diag.log("emvol", "fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
+        }
+        return out;
+    }
 
-    /** K 线序列：价格 + 日期 */
+    /**
+     * 东财单条行情（国际指数用）：缩放倍数取 f59（小数位数），不写死
+     * 新浪的台股是旧快照，台湾那一条改走这里，保证行情和日 K 是同一个指数
+     */
+    static Item fetchEastQuoteAuto(String secid, String code, String fallbackName) {
+        Item it = new Item();
+        it.code = code;
+        it.name = fallbackName;
+        it.displayCode = fallbackName;
+        it.volTxt = "--";
+        it.amtTxt = "--";
+        try {
+            String url = "http://push2.eastmoney.com/api/qt/stock/get?secid=" + secid
+                    + "&fields=f43,f44,f45,f46,f57,f58,f59,f60,f86,f169,f170";
+            byte[] raw = fetch(url, "https://quote.eastmoney.com/", 8000);
+            JSONObject root = new JSONObject(new String(raw, "UTF-8"));
+            JSONObject d = root.optJSONObject("data");
+            if (d == null) return it;
+            String nm = d.optString("f58");
+            if (nm != null && nm.length() > 0) { it.name = nm; it.displayCode = nm; }
+            int dec = d.optInt("f59", 2);
+            if (dec < 0 || dec > 6) dec = 2;
+            float scale = (float) Math.pow(10, dec);
+            double live = d.optDouble("f43", 0);
+            if (live == 0) {
+                live = d.optDouble("f60", 0);
+                it.stale = true;
+            }
+            it.price = (float) (live / scale);
+            it.prevClose = (float) (d.optDouble("f60", 0) / scale);
+            it.open = (float) (d.optDouble("f46", 0) / scale);
+            it.high = (float) (d.optDouble("f44", 0) / scale);
+            it.low = (float) (d.optDouble("f45", 0) / scale);
+            it.change = (float) (d.optDouble("f169", 0) / scale);
+            it.pct = (float) (d.optDouble("f170", 0) / 100.0);
+            long ts = d.optLong("f86", 0);
+            if (ts > 0) {
+                it.time = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                        .format(new java.util.Date(ts * 1000L));
+            }
+            Diag.log("emquote", code + " price=" + it.price + " dec=" + dec);
+        } catch (Throwable t) {
+            Diag.log("emquote", code + " fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
+        }
+        return it;
+    }
+
+
+    /** K 线序列：价格 + 日期（另带最后一根的今开/最高/最低，详情里缺数时补上） */
     static class Series {
         List<Float> values = new ArrayList<Float>();
         List<String> labels = new ArrayList<String>();
+        float lastOpen, lastHigh, lastLow;
     }
 
-    /** 东财日 K 近一年收盘价（黄金走势用），返回时间正序 */
+    private static float f(String s) {
+        if (s == null) return 0f;
+        try {
+            s = s.trim();
+            return s.length() == 0 ? 0f : Float.parseFloat(s);
+        } catch (Throwable t) {
+            return 0f;
+        }
+    }
+
+    /** 东财日 K 近一年（黄金 / 国际指数 / 个股用），返回时间正序 */
     static Series fetchKline(String secid, String code, int limit) {
         Series out = new Series();
+        Diag.log("kline", "em fetch " + secid + " for " + code);
         try {
             String url = "http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + secid
-                    + "&fields1=f1,f2,f3&fields2=f51,f53&klt=101&fqt=1&beg=0&end=20500101&lmt=" + limit;
+                    + "&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55"
+                    + "&klt=101&fqt=1&beg=0&end=20500101&lmt=" + limit;
             byte[] raw = fetch(url, "https://quote.eastmoney.com/", 9000);
             JSONObject root = new JSONObject(new String(raw, "UTF-8"));
             JSONObject data = root.optJSONObject("data");
@@ -404,14 +520,21 @@ public class QuoteApi {
             if (ks == null) return out;
             for (int i = 0; i < ks.length(); i++) {
                 String[] p = ks.optString(i).split(",");
-                if (p.length >= 2) {
-                    try {
-                        out.values.add(Float.parseFloat(p[1]));
-                        String d = p[0];
-                        if (d.length() >= 10) d = d.substring(5);   // 2026-11-02 -> 11-02
-                        out.labels.add(d);
-                    } catch (Throwable ignored) { }
-                }
+                if (p.length < 2) continue;
+                try {
+                    // f51 日期 / f52 开 / f53 收 / f54 高 / f55 低
+                    // 接口万一只回「日期,收」两列也能用
+                    int ci = p.length >= 3 ? 2 : 1;
+                    out.values.add(Float.parseFloat(p[ci]));
+                    String d = p[0];
+                    if (d.length() >= 10) d = d.substring(5);   // 2026-11-02 -> 11-02
+                    out.labels.add(d);
+                    if (p.length >= 5) {
+                        out.lastOpen = f(p[1]);
+                        out.lastHigh = f(p[3]);
+                        out.lastLow = f(p[4]);
+                    }
+                } catch (Throwable ignored) { }
             }
             // 接口的 lmt 参数不一定生效，自己截取最后 limit 根
             if (out.values.size() > limit) {
@@ -421,9 +544,18 @@ public class QuoteApi {
                     tail.values.add(out.values.get(i));
                     tail.labels.add(out.labels.get(i));
                 }
+                tail.lastOpen = out.lastOpen;
+                tail.lastHigh = out.lastHigh;
+                tail.lastLow = out.lastLow;
                 out = tail;
             }
-            Diag.log("kline", code + " bars=" + out.values.size());
+            if (out.values.size() > 0) {
+                Diag.log("kline", code + " bars=" + out.values.size()
+                        + " first=" + out.values.get(0)
+                        + " last=" + out.values.get(out.values.size() - 1));
+            } else {
+                Diag.log("kline", code + " empty");
+            }
         } catch (Throwable t) {
             Diag.log("kline", code + " fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
         }
@@ -461,6 +593,11 @@ public class QuoteApi {
                 String d = row.optString(0);
                 try {
                     out.values.add(Float.parseFloat(row.optString(2)));   // 收盘
+                    if (row.length() >= 5) {
+                        out.lastOpen = f(row.optString(1));
+                        out.lastHigh = f(row.optString(3));
+                        out.lastLow = f(row.optString(4));
+                    }
                     if (d != null && d.length() >= 10) d = d.substring(5);
                     out.labels.add(d == null ? "" : d);
                 } catch (Throwable ignored) { }
@@ -518,7 +655,8 @@ public class QuoteApi {
 
     /**
      * 新浪行情：国际指数（int_/znb_ 前缀）与 A 股指数（sh/sz）
-     * 国际：名称,现价,涨跌额,涨跌幅,...
+     * 国际短格式：名称,现价,涨跌额,涨跌幅
+     * 国际长格式（znb_）：名称,现价,涨跌额,涨跌幅,时,戳,日期,时间,今开,昨收,最高,最低,...
      * A股 ：名称,今开,昨收,现价,最高,最低,...
      */
     static List<Item> fetchSina(List<String> codes) {
@@ -557,6 +695,21 @@ public class QuoteApi {
                     it.change = num2(f, 2);
                     it.pct = num2(f, 3);
                     it.prevClose = it.price - it.change;
+                    // 长格式带今开 / 昨收 / 最高 / 最低，补齐后行情区和国内一致
+                    if (f.length >= 12) {
+                        float o = num2(f, 8), pc = num2(f, 9);
+                        float hi = num2(f, 10), lo = num2(f, 11);
+                        if (pc > 0f && hi > 0f && lo > 0f) {
+                            it.open = o;
+                            it.prevClose = pc;
+                            it.high = hi;
+                            it.low = lo;
+                            it.change = it.price - pc;
+                            it.pct = it.change / pc * 100f;
+                        }
+                        String d = f[6].trim(), tm = f[7].trim();
+                        if (d.length() >= 8 && tm.length() >= 5) it.time = d + " " + tm;
+                    }
                 } else {
                     it.open = num2(f, 1);
                     it.prevClose = num2(f, 2);
