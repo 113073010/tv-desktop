@@ -165,7 +165,7 @@ adb shell su -c 'sh /data/local/tmp/clean-dev.sh'
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 替换 APK 后界面没变化 | 桌面进程没杀掉，还在用旧 dex | `kill -9` 桌面进程后再替换 |
-| 替换 APK 后还是旧版 | `SCREEN_INFO` 里 MD5 / 大小没更新 | 同步更新记录的 MD5 与 FILE_SIZE |
+| 替换 APK 后还是旧版 | ① 桌面把插件 dex 缓存在 `files/plugins_data/<包名>/dex/`，只换 APK 不删它会继续跑旧代码；② `SCREEN_INFO` 里 MD5 / 大小没更新 | 先 `rm -rf files/plugins_data/<包名>`（`restore.sh` 已自动做），再同步 MD5 与 FILE_SIZE |
 | 桌面一直「正在获取…」 | 插件内部状态没刷新 | 分类条上按「确定」刷新 |
 | 桌面进不去 | DB 结构与固件不匹配 | 用备份回退，改走方式 B |
 | 直播播不了 rtsp/4K | 没装 TVBox | 装 `com.github.tvbox.osc.tk` |

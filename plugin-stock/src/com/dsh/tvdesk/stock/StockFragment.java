@@ -94,6 +94,8 @@ public class StockFragment extends BaseFragment {
     private final TextView[] mC98 = new TextView[ROWS];
     private final TextView[] mC0 = new TextView[ROWS];
     private LinearLayout mOilHead, mStockHead;
+    /** 右侧详情区：左区按左右键把焦点送进来，进来后按左右键回左区 */
+    private LinearLayout mRightBox;
     private final View[] mRowsV = new View[ROWS];
 
     private TextView dName, dCode, dPrice, dChange, dPct, dMeta;
@@ -777,6 +779,12 @@ public class StockFragment extends BaseFragment {
         box.setFocusable(true);
         box.setClickable(true);
         box.setOnKeyListener(sideKeys);
+        box.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override public void onFocusChange(View v, boolean has) {
+                v.setBackground(has ? panelFocused() : panel());
+            }
+        });
+        mRightBox = box;
 
         dName = new TextView(ctx);
         dName.setTextSize(25f);
@@ -883,6 +891,13 @@ public class StockFragment extends BaseFragment {
         GradientDrawable d = new GradientDrawable();
         d.setColor(0xE610141D);
         d.setCornerRadius(dp(12));
+        return d;
+    }
+
+    /** 右侧详情区拿到焦点时描一圈，不然电视上看不出焦点跑到右边了 */
+    private GradientDrawable panelFocused() {
+        GradientDrawable d = panel();
+        d.setStroke(dp(2), 0x99FFFFFF);
         return d;
     }
 
@@ -1683,9 +1698,10 @@ public class StockFragment extends BaseFragment {
                     }
                     return true;
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
-                    if (dChart != null) dChart.requestFocus();
-                    return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
+                    // 左区在任何分类里都往右区送焦点：以前 RIGHT 只认分时图，
+                    // 而分时图在油价/基金/国际这些分类是隐藏的，按了没反应
+                    if (mRightBox != null && mRightBox.requestFocus()) return true;
                     if (mChips[mTab] != null) mChips[mTab].requestFocus();
                     return true;
                 case KeyEvent.KEYCODE_BACK:
@@ -1708,8 +1724,14 @@ public class StockFragment extends BaseFragment {
                     if (mRowsV[slot] != null) mRowsV[slot].requestFocus();
                     return true;
                 }
-                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT: {
+                    // 右区最右边按右键：绕回左区第一条
+                    mOffset = 0;
+                    mFocus = 0;
+                    refreshRows();
+                    if (mRowsV[0] != null) mRowsV[0].requestFocus();
                     return true;
+                }
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
                     return true;

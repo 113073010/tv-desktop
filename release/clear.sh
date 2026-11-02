@@ -61,7 +61,7 @@ done
 
 echo "[2/7] 删除插件数据目录"
 for n in $NAMES; do
-    d="$L/plugins_data/com.dsh.tvdesk.$n"
+    d="$L/files/plugins_data/com.dsh.tvdesk.$n"
     if [ -d "$d" ]; then
         rm -rf "$d" && echo "     已删 plugins_data/com.dsh.tvdesk.$n"
     fi
@@ -134,7 +134,7 @@ for n in $NAMES; do
     if [ -f "$P/$n.apk" ]; then echo " ! $n.apk 仍存在"; left=$((left+1)); fi
 done
 for n in $NAMES; do
-    if [ -d "$L/plugins_data/com.dsh.tvdesk.$n" ]; then echo " ! plugins_data/com.dsh.tvdesk.$n 仍存在"; left=$((left+1)); fi
+    if [ -d "$L/files/plugins_data/com.dsh.tvdesk.$n" ]; then echo " ! plugins_data/com.dsh.tvdesk.$n 仍存在"; left=$((left+1)); fi
 done
 for f in tvdesk_news.xml tvdesk_live.xml tvdesk_douban.xml tvdesk_radio.xml tvdesk_stock.xml; do
     if [ -f "$L/shared_prefs/$f" ]; then echo " ! shared_prefs/$f 仍存在"; left=$((left+1)); fi

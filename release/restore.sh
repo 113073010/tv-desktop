@@ -61,7 +61,9 @@ for n in $NAMES; do
     chown system:system "$P/$n.apk.new" 2>/dev/null
     chmod 600 "$P/$n.apk.new"
     mv -f "$P/$n.apk.new" "$P/$n.apk"
-    rm -rf "$L/plugins_data/com.dsh.tvdesk.$n"
+    # 插件 dex 缓存在 files/plugins_data/<包名>/dex/，不删的话换完 APK 跑的
+    # 还是旧代码（桌面不比对 APK 新旧，只认这份缓存的 dex）
+    rm -rf "$L/files/plugins_data/com.dsh.tvdesk.$n"
     echo "  $n.apk  $(fsize "$P/$n.apk") bytes"
 done
 
