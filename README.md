@@ -2,7 +2,7 @@
 
 > 不重做 Launcher，只在乐视原生桌面上增加自己想要的 **Tab**：新闻、直播、豆瓣荐片、电台、股票。
 
-![桌面](docs/images/stock-main.jpg)
+![股票](docs/images/stock-main.jpg)
 
 ## 这是什么
 
@@ -55,7 +55,13 @@
 
 ### 股票
 
-![股票](docs/images/stock-main.jpg)
+国际分栏，默认近一年日 K：
+
+![股票 日K](docs/images/stock-main.jpg)
+
+详情区按「确定」切当日分时：
+
+![股票 分时](docs/images/stock-minute.jpg)
 
 六个分栏，遥控器左右切换：
 
