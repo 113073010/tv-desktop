@@ -107,7 +107,7 @@ VALUES
 | 直播 | `com.dsh.tvdesk.live` | 27 | `release/live.apk` |
 | 豆瓣荐片 | `com.dsh.tvdesk.douban` | 46 | `release/douban.apk` |
 | 电台 | `com.dsh.tvdesk.radio` | 26 | `release/radio.apk` |
-| 股票 | `com.dsh.tvdesk.stock` | 8 | `release/stock.apk` |
+| 股票 | `com.dsh.tvdesk.stock` | 9 | `release/stock.apk` |
 
 数据库模板里这五条都已登记好，`MD5` / `FILE_SIZE` / `PLUGIN_PATH` 与实际 APK 对应。
 

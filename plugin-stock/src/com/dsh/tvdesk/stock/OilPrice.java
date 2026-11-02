@@ -1,7 +1,13 @@
 package com.dsh.tvdesk.stock;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -34,6 +40,8 @@ public class OilPrice {
         public int forecastDir = 0;      // 1 涨 / -1 跌 / 0 搁浅未知
         public float forecastValue = 0f; // 预计调整（元/升），带符号
         public boolean ok = false;
+        /** 页面 404：这个省没有页面，重试没意义 */
+        public boolean missing = false;
     }
 
     private static byte[] fetch(String url, int timeoutMs) throws Exception {
@@ -114,6 +122,10 @@ public class OilPrice {
             o.p20 = shift(o.p0, 0.20f);
             o.p35 = shift(o.p0, 0.32f);
             Diag.log("oil", name + " 92=" + o.p92 + " 95=" + o.p95 + " 98=" + o.p98 + " 0=" + o.p0);
+        } catch (java.io.FileNotFoundException e) {
+            // 404：这个省在站上没有页面，别重试、也别算进「缺几个省」
+            o.missing = true;
+            Diag.log("oil", name + " 404");
         } catch (Throwable t) {
             Diag.log("oil", name + " fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
         }
@@ -127,18 +139,91 @@ public class OilPrice {
         public int gasolinePerTon = 0;   // 汽油每吨涨跌（元/吨），0 表示搁浅
     }
 
-    /** 抓调价时间表：优先 soyoujia（数据新），失败退回 qiyoujiage */
-    public static List<Adjust> fetchAdjusts() {
-        List<Adjust> list = fetchFromSoyoujia();
-        if (list.size() >= 8) {
-            Diag.log("oil", "adjusts(soyoujia)=" + list.size()
-                    + " latest=" + list.get(0).date);
-            return list;
+    private static final String ADJ_FILE = "/sdcard/tvdesk/oil.adjusts";
+    private static final long ADJ_TTL = 6 * 60 * 60 * 1000L;
+    private static List<Adjust> sAdj = null;
+    private static long sAdjAt = 0;
+    private static boolean sAdjLoaded = false;
+
+    /**
+     * 调价时间表：优先 soyoujia（数据新），失败退回 qiyoujiage。
+     *
+     * 这张表只在每次调价后变，曲线和「下次调价」都靠它，但插件每次切 TAB
+     * 都会被重新加载（静态变量跟着没），所以缓存也落到 /sdcard/tvdesk/oil.adjusts，
+     * 6 小时内不再联网。
+     */
+    public static synchronized List<Adjust> fetchAdjusts() {
+        if (!sAdjLoaded) {
+            sAdjLoaded = true;
+            sAdj = loadAdjusts();
         }
-        List<Adjust> old = fetchFromQiyoujiage();
-        Diag.log("oil", "adjusts(qiyoujiage)=" + old.size()
-                + (old.isEmpty() ? "" : " latest=" + old.get(0).date));
-        return old;
+        long now = System.currentTimeMillis();
+        if (sAdj != null && !sAdj.isEmpty() && now - sAdjAt < ADJ_TTL) {
+            return sAdj;
+        }
+        List<Adjust> list = fetchFromSoyoujia();
+        if (list.size() < 8) {
+            List<Adjust> old = fetchFromQiyoujiage();
+            if (!old.isEmpty()) list = old;
+        }
+        if (!list.isEmpty()) {
+            sAdj = list;
+            sAdjAt = now;
+            saveAdjusts(list, now);
+            Diag.log("oil", "adjusts=" + list.size() + " latest=" + list.get(0).date);
+        }
+        return list;
+    }
+
+    private static List<Adjust> loadAdjusts() {
+        List<Adjust> out = new ArrayList<Adjust>();
+        File f = new File(ADJ_FILE);
+        if (!f.isFile()) return out;
+        BufferedReader r = null;
+        try {
+            r = new BufferedReader(new InputStreamReader(new FileInputStream(f), "UTF-8"));
+            String line;
+            long at = 0;
+            while ((line = r.readLine()) != null) {
+                if (line.startsWith("#ts=")) {
+                    try { at = Long.parseLong(line.substring(4).trim()); } catch (Throwable ignored) { }
+                    continue;
+                }
+                if (line.length() == 0 || line.startsWith("#")) continue;
+                String[] p = line.split("\t", -1);
+                if (p.length < 2 || p[0].length() < 8) continue;
+                Adjust a = new Adjust();
+                a.date = p[0];
+                try { a.gasolinePerTon = Integer.parseInt(p[1]); } catch (Throwable ignored) { }
+                out.add(a);
+            }
+            if (System.currentTimeMillis() - at > ADJ_TTL) out.clear();
+            else sAdjAt = at;
+        } catch (Throwable t) {
+            Diag.log("oil", "adjusts read fail " + t.getClass().getSimpleName());
+            out.clear();
+        } finally {
+            try { if (r != null) r.close(); } catch (Throwable ignored) { }
+        }
+        return out;
+    }
+
+    private static void saveAdjusts(List<Adjust> list, long at) {
+        File f = new File(ADJ_FILE);
+        File dir = f.getParentFile();
+        if (dir != null) dir.mkdirs();
+        OutputStreamWriter w = null;
+        try {
+            w = new OutputStreamWriter(new FileOutputStream(f), "UTF-8");
+            w.write("#ts=" + at + "\n");
+            for (Adjust a : list) {
+                w.write(a.date + "\t" + a.gasolinePerTon + "\n");
+            }
+        } catch (Throwable t) {
+            Diag.log("oil", "adjusts write fail " + t.getClass().getSimpleName());
+        } finally {
+            try { if (w != null) w.close(); } catch (Throwable ignored) { }
+        }
     }
 
     /**

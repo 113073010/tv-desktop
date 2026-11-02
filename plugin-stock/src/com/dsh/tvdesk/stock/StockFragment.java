@@ -81,8 +81,8 @@ public class StockFragment extends BaseFragment {
     private int mDp = 2;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private final ExecutorService mPool = Executors.newFixedThreadPool(2);
-    /** 抓油价专用：并发高一点，31 个省才能快 */
-    private final ExecutorService mOilPool = Executors.newFixedThreadPool(10);
+    /** 抓油价专用：31 个省分 4 路取，并发太高会被站点当爬虫（返回 404） */
+    private final ExecutorService mOilPool = Executors.newFixedThreadPool(4);
 
     private TextView[] mChips = new TextView[TITLES.length];
     private TextView mTitle, mStatus;
@@ -111,8 +111,14 @@ public class StockFragment extends BaseFragment {
     private int mOilSel = 0;
     /** 刷新后要回到的省份（默认吉林） */
     private String mLastOilName = "吉林";
-    /** true = 本次刷新跳过缓存，但保留界面旧数据 */
-    private boolean mOilForce = false;
+    /** 正在抓全国油价：挡住切栏/切回时叠出来的第二轮请求 */
+    private boolean mOilLoading = false;
+    /** 抓取代次：上一轮的慢响应回来了也直接丢掉，不会盖掉新数据 */
+    private int mOilGen = 0;
+    /** 31 省都有价格了（用来判断切回分类时要不要再抓） */
+    private boolean mOilComplete = false;
+    /** 这一份油价是什么时候抓的，状态栏显示用 */
+    private long mOilAt = 0;
     private OilPrice.Oil mOil = null;
     /** 当前详情面板对应的代码，用于丢弃过期的分时回调 */
     private String mSelCode = null;
@@ -361,7 +367,7 @@ public class StockFragment extends BaseFragment {
             boolean inPlace = mItems.size() == OilPrice.PROVINCES.length
                     && mItems.get(0).kind == 2;
             if (inPlace) {
-                loadAllOil();
+                loadAllOil(false);
                 return;
             }
             List<QuoteApi.Item> list = new ArrayList<QuoteApi.Item>();
@@ -379,8 +385,12 @@ public class StockFragment extends BaseFragment {
             mFocus = 0;
             refreshRows();
             if (mOilHead != null) mOilHead.setVisibility(View.VISIBLE);
-            status("正在获取全国油价…");
-            loadAllOil();
+            if (OilCache.fresh()) {
+                status("油价 " + hhmm(OilCache.newestAt()) + " 已取过 · 按「确定」刷新");
+            } else {
+                status("正在获取全国油价…");
+            }
+            loadAllOil(false);
             // 下次调价日期需要联网推算，放后台
             mOilPool.execute(new Runnable() {
                 @Override public void run() {
@@ -913,10 +923,12 @@ public class StockFragment extends BaseFragment {
         loadData();
     }
 
-    /** 刷新当前分类；油价要清缓存才会真正重抓 */
+    /** 刷新当前分类；油价只有手动按「确定」才会真的重抓 */
     private void doRefresh() {
         if (mTab == TAB_OIL) {
-            mOilForce = true;          // 跳过缓存重新抓
+            if (mOilLoading) { status("正在刷新全国油价… 稍等"); return; }
+            // 注意：这里不清缓存。清掉的话，一旦站点限流返回 404，
+            // 整张表会立刻变成 "--"；不清就能「抓不到就沿用上次」。
             HistoryCache.clear();      // 曲线要重算
             status("正在刷新全国油价…");
             // 已经有一份表格就就地刷新，绝不重建（重建会让整屏变空）
@@ -927,7 +939,7 @@ public class StockFragment extends BaseFragment {
                 mFocus = def;
                 refreshRows();
                 selectRow(def, false);
-                loadAllOil();
+                loadAllOil(true);
             } else {
                 loadData();
             }
@@ -1290,53 +1302,134 @@ public class StockFragment extends BaseFragment {
         return Math.min(6, Math.max(0, mItems.size() - 1));
     }
 
-    private void loadAllOil() {
+    /**
+     * 抓全国油价。
+     *
+     * force=false：只补缓存里没有的省；全都有缓存时一次网络都不发
+     *              （切分类、从别的 TAB 切回来走的就是这条路）
+     * force=true ：手动按「确定」，31 省全部重抓（调用方先清缓存）
+     *
+     * 单飞 + 代次：同一时刻只有一轮在跑；上一轮迟到的响应回来直接丢弃，
+     * 不会再出现「新数据刚填好、又被几分钟前的旧数据盖回去」。
+     */
+    private void loadAllOil(final boolean force) {
+        if (mOilLoading && !force) return;
+
         final int total = OilPrice.PROVINCES.length;
+        final int gen = ++mOilGen;
         final java.util.concurrent.atomic.AtomicInteger done =
                 new java.util.concurrent.atomic.AtomicInteger(0);
+        final java.util.concurrent.atomic.AtomicInteger gone =
+                new java.util.concurrent.atomic.AtomicInteger(0);   // 站点 404：没这个页面
+        final java.util.concurrent.atomic.AtomicInteger failed =
+                new java.util.concurrent.atomic.AtomicInteger(0);  // 超时 / 断网
+        int fromCache = 0;
+        boolean needNet = false;
+
         for (int i = 0; i < total; i++) {
             final int idx = i;
             final String name = OilPrice.PROVINCES[i][0];
             final String slug = OilPrice.PROVINCES[i][1];
-            final OilPrice.Oil cached = mOilForce ? null : OilCache.get(slug);
+            final OilPrice.Oil cached = OilCache.get(slug);
             if (cached != null) {
+                fromCache++;
+                applyOilRow(idx, cached);   // 先把旧值摆上，手动刷新时屏幕也不会空
+            }
+            if (cached != null && !force) {
                 done.incrementAndGet();
-                applyOilRow(idx, cached);
                 continue;
             }
+            needNet = true;
+            final long delay = (idx % 8) * 80L;   // 摊开一点，别一堆请求同时怼过去
             mOilPool.execute(new Runnable() {
                 @Override public void run() {
-                    final OilPrice.Oil oil = OilPrice.fetch(name, slug);
+                    try { if (delay > 0) Thread.sleep(delay); } catch (Throwable ignored) { }
+                    OilPrice.Oil oil = OilPrice.fetch(name, slug);
+                    // 404 是站点上没这个页面，重试没意义；超时/断网才补一次
+                    if (oil != null && !oil.ok && !oil.missing) {
+                        try { Thread.sleep(800); } catch (Throwable ignored) { }
+                        OilPrice.Oil retry = OilPrice.fetch(name, slug);
+                        if (retry != null && retry.ok) oil = retry;
+                    }
                     OilCache.put(slug, oil);
+                    final OilPrice.Oil result = oil;
+                    if (oil == null || oil.missing) gone.incrementAndGet();
+                    else if (!oil.ok) failed.incrementAndGet();
                     final int n = done.incrementAndGet();
                     mMain.post(new Runnable() {
                         @Override public void run() {
-                            applyOilRow(idx, oil);        // 数据总是写回表格
-                            if (mTab == TAB_OIL) {
-                                status("正在获取全国油价… " + n + "/" + total);
-                            }
+                            if (gen != mOilGen) return;    // 上一轮的，丢掉
+                            // 只有真拿到价才覆盖；这一省失败就保留上一轮的值，
+                            // 不会因为一次限流把整格刷成 "--"
+                            if (result != null && result.ok) applyOilRow(idx, result);
+                            if (n < total) status("正在获取全国油价… " + n + "/" + total);
+                            else finishOil(gen, total, gone.get(), failed.get());
                         }
                     });
                 }
             });
         }
-        // 进度用定时轮询，0.5 秒刷一次，不依赖单次回调
-        mMain.post(new Runnable() {
-            @Override public void run() {
-                int fin = done.get();
-                if (mTab == TAB_OIL) refreshRows();
-                if (fin >= total) {
-                    mOilForce = false;
-                    String t = new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
-                            .format(new java.util.Date());
-                    refreshRows();     // 数据齐了，整体重绘一次，避免个别行还是 --
-                    status("数据更新于 " + t + " · qiyoujiage.com · " + total + " 省");
-                    return;
-                }
-                status("正在获取全国油价… " + fin + "/" + total);
-                mMain.postDelayed(this, 500);
-            }
-        });
+
+        if (!needNet) {                                    // 全都命中缓存，一次网络都不发
+            mOilLoading = false;
+            mOilComplete = true;
+            if (mOilAt == 0) mOilAt = OilCache.newestAt();
+            refreshRows();
+            status("油价 " + hhmm(mOilAt) + " 取过（本地缓存）· 按「确定」刷新");
+            return;
+        }
+
+        // 一个省都没缓存、而且刚抓过：多半是被站点限流了，退避 20 分钟再自动补，
+        // 不然每次切回 TAB 都重锤 31 个请求，越抓越抓不到。
+        if (fromCache == 0 && !force && OilCache.tryAt() > 0
+                && System.currentTimeMillis() - OilCache.tryAt() < 20 * 60 * 1000L) {
+            mOilLoading = false;
+            mOilComplete = false;
+            refreshRows();
+            status("上次没取到油价 · 稍后再进，或按「确定」强制刷新");
+            return;
+        }
+
+        OilCache.markTry();
+        mOilLoading = true;
+        status("正在获取全国油价… " + fromCache + "/" + total);
+        // 兜底：个别省卡死不回，20 秒后也要收尾，别一直挂在「正在获取」
+        mMain.postDelayed(new Runnable() {
+            @Override public void run() { finishOil(gen, total, gone.get(), failed.get()); }
+        }, 20000);
+    }
+
+    /** 一轮抓取收尾：统计缺几省、写状态栏 */
+    private void finishOil(int gen, int total, int unavailable, int failed) {
+        if (gen != mOilGen || !mOilLoading) return;
+        mOilLoading = false;
+        mOilAt = System.currentTimeMillis();
+        OilCache.flush();                                  // 落盘，下次切 TAB 直接用
+        refreshRows();
+        int blank = 0;
+        for (int i = 0; i < mItems.size(); i++) {
+            if (mItems.get(i).kind == 2 && mItems.get(i).price <= 0) blank++;
+        }
+        mOilComplete = blank == 0;
+        if (mTab != TAB_OIL) return;
+        String t = hhmm(mOilAt);
+        if (blank == 0 && unavailable == 0 && failed == 0) {
+            status("油价更新于 " + t + " · " + total + " 省 · 按「确定」刷新");
+        } else if (blank == 0 && unavailable > 0) {
+            status("油价更新于 " + t + " · " + (total - unavailable) + "/" + total
+                    + " 省（" + unavailable + " 省站点无数据）");
+        } else if (blank == 0) {
+            status("油价更新于 " + t + " · 31 省（" + failed + " 省没更新，沿用上次）");
+        } else {
+            status("油价更新于 " + t + " · " + (total - blank) + "/" + total
+                    + " 省，其余没取到");
+        }
+    }
+
+    private static String hhmm(long at) {
+        if (at <= 0) return "--:--";
+        return new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+                .format(new java.util.Date(at));
     }
 
     /** 把某省的四个价格填进左表对应行 */
@@ -1377,6 +1470,7 @@ public class StockFragment extends BaseFragment {
             @Override public void run() {
                 final OilPrice.Oil oil = OilPrice.fetch(name, slug);
                 OilCache.put(slug, oil);
+                OilCache.flush();
                 mMain.post(new Runnable() {
                     @Override public void run() {
                         if (!("oil:" + slug).equals(mSelCode)) return;
@@ -1670,9 +1764,15 @@ public class StockFragment extends BaseFragment {
     @Override public void setHoverListener(View.OnHoverListener listener) { }
 
     @Override public void onFragmentShowChanged(boolean shown) {
-        if (shown) {
-            loadData();
+        if (!shown) return;
+        // 油价不是行情：31 省都齐了、缓存也没过期，就只重绘，一次网络都不发
+        if (mTab == TAB_OIL && mOilComplete && OilCache.fresh()) {
+            refreshRows();
+            status("油价 " + hhmm(mOilAt > 0 ? mOilAt : OilCache.newestAt())
+                    + " 取过（本地缓存）· 按「确定」刷新");
+            return;
         }
+        loadData();
     }
 
     @Override public void onDestroyView() {
