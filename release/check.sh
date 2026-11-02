@@ -12,12 +12,15 @@
 #    · SCREEN_INFO 表结构能不能用仓库里的数据库模板
 # ============================================================
 
-DIR=$(dirname "$0")
+case "$0" in */*) DIR=${0%/*} ;; *) DIR=. ;; esac
 L=/data/data/com.stv.launcher
 P=$L/files/plugins
 DB=$L/databases/launcher_new.db
 TEMPLATE="$DIR/launcher_new.db"
 NAMES="news live douban radio stock"
+
+# 文件大小（字节），不依赖 awk（这台电视的 shell 只有 toolbox）
+fsize() { set -- $(ls -l "$1" 2>/dev/null); echo "$4"; }
 
 echo "=================================================="
 echo " 乐视桌面五 TAB 恢复前体检"
@@ -25,11 +28,10 @@ echo "=================================================="
 
 echo ""
 echo "[1/5] root 权限"
-if [ "$(id -u)" = "0" ]; then
-    echo "  OK  已是 root"
-else
-    echo "  失败  当前不是 root，请先 su（电视上会弹 SuperSU，点授权）"
-fi
+case "$(id)" in
+    uid=0*) echo "  OK  已是 root" ;;
+    *)      echo "  失败  当前不是 root，请先 su（电视上会弹 SuperSU，点授权）" ;;
+esac
 
 echo ""
 echo "[2/5] 桌面进程"
@@ -39,9 +41,9 @@ else
     echo "  失败  找不到 $L，这可能不是乐视电视"
     exit 3
 fi
-PID=$(ps | grep com.stv.launcher | grep -v ':' | awk '{print $2}' | head -n 1)
+PID=$(ps | grep '[c]om.stv.launcher')
 if [ -n "$PID" ]; then
-    echo "  OK  桌面在运行 pid=$PID"
+    echo "  OK  桌面在运行"
 else
     echo "  提示  桌面当前没运行（恢复前本来就要停掉它）"
 fi
@@ -51,7 +53,7 @@ echo "[3/5] 现有插件"
 if [ -d "$P" ]; then
     for n in $NAMES; do
         if [ -f "$P/$n.apk" ]; then
-            echo "  $n.apk  $(ls -l "$P/$n.apk" | awk '{print $5}') bytes"
+            echo "  $n.apk  $(fsize "$P/$n.apk") bytes"
         else
             echo "  $n.apk  （未安装）"
         fi
@@ -63,7 +65,7 @@ fi
 echo ""
 echo "[4/5] 数据库"
 if [ -f "$DB" ]; then
-    echo "  OK  现有数据库 $(ls -l "$DB" | awk '{print $5}') bytes"
+    echo "  OK  现有数据库 $(fsize "$DB") bytes"
 else
     echo "  提示  数据库不存在（全新刷机后第一次启动桌面会重建）"
 fi

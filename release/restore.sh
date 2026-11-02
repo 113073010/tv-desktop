@@ -10,13 +10,16 @@
 #    news.apk  live.apk  douban.apk  radio.apk  stock.apk  launcher_new.db
 # ============================================================
 
-DIR=$(dirname "$0")
+case "$0" in */*) DIR=${0%/*} ;; *) DIR=. ;; esac
 L=/data/data/com.stv.launcher
 P=$L/files/plugins
 DB=$L/databases/launcher_new.db
 
 # 插件文件名（也是包名后缀）
 NAMES="news live douban radio stock"
+
+# 文件大小（字节），不依赖 awk（这台电视的 shell 只有 toolbox）
+fsize() { set -- $(ls -l "$1" 2>/dev/null); echo "$4"; }
 
 echo "== 检查文件 =="
 for n in $NAMES; do
@@ -43,10 +46,13 @@ cp -f "$DB" /sdcard/launcher_new.before_restore.db 2>/dev/null && \
 echo "== 停桌面（否则它会立刻重启并占用旧文件）=="
 am force-stop com.stv.launcher 2>/dev/null
 sleep 1
-for p in $(ps | grep com.stv.launcher | grep -v ':' | awk '{print $2}'); do
-    kill -9 "$p" 2>/dev/null
+i=0
+while [ -n "$(ps | grep '[c]om.stv.launcher')" ] && [ $i -lt 5 ]; do
+    am force-stop com.stv.launcher 2>/dev/null
+    sleep 1
+    i=$((i+1))
 done
-sleep 2
+sleep 1
 
 echo "== 安装插件 =="
 mkdir -p "$P"
@@ -56,7 +62,7 @@ for n in $NAMES; do
     chmod 600 "$P/$n.apk.new"
     mv -f "$P/$n.apk.new" "$P/$n.apk"
     rm -rf "$L/plugins_data/com.dsh.tvdesk.$n"
-    echo "  $n.apk  $(ls -l "$P/$n.apk" | awk '{print $5}') bytes"
+    echo "  $n.apk  $(fsize "$P/$n.apk") bytes"
 done
 
 echo "== 替换数据库 =="

@@ -134,7 +134,7 @@ adb shell su -c 'ls -l /data/data/com.stv.launcher/databases/launcher_new.db'
 adb shell su -c 'sh /data/local/tmp/tvrestore/clear.sh'
 ```
 
-`clear.sh` 会清掉 5 个插件 APK、`plugins_data` 缓存和对应日志，并保留一份数据库备份。
+`clear.sh` 会清掉 5 个插件 APK、`plugins_data` 缓存和对应日志，并把 `SCREEN_INFO` 里这五条记录一并删掉（替换成 `release/launcher_clean.db`，只留「首页 / 应用」），原库备份到 `/sdcard/launcher_new.before_clear.db`。桌面不会留下指向已删 APK 的空 TAB。
 
 如果恢复后桌面起不来，把备份推回去：
 
@@ -144,6 +144,19 @@ adb shell su -c 'rm -f /data/data/com.stv.launcher/databases/launcher_new.db-jou
 adb shell am force-stop com.stv.launcher
 adb shell am start -n com.stv.launcher/.activity.Launcher
 ```
+
+---
+
+## 开发调试残留
+
+反复 `adb push` + 换 APK 会在电视上堆出一批临时物（最狠的是 `/data/local/tmp`：旧插件 APK、28MB 的恢复工具副本、上百个 launcher DB 快照、dalvik 缓存）。它们不影响使用，但白占 `/data`。清一次：
+
+```bash
+adb push release/clean-dev.sh /data/local/tmp/
+adb shell su -c 'sh /data/local/tmp/clean-dev.sh'
+```
+
+默认删 `/data/local/tmp`、桌面 `cache/ijkdex`、`/sdcard` 根目录的 `tvdesk*.log` / 调试截图 / `ui.xml` / `plugin_dev`；加 `--all` 连数据库快照一起删。插件 APK、`plugins_data`、`/sdcard/DIYP影音`、`/sdcard/tvdesk/自选.txt` 都不会动。
 
 ---
 

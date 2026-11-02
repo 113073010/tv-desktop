@@ -1,0 +1,10 @@
+# 电视上的 shell 只认 LF：脚本必须按 LF 检出，否则推到电视会报 syntax error
+*.sh    text eol=lf
+*.bat   text eol=crlf
+
+# 二进制，别做换行转换
+*.apk   binary
+*.db    binary
+*.jks   binary
+*.png   binary
+*.jpg   binary
