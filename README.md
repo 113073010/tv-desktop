@@ -2,7 +2,7 @@
 
 > 不重做 Launcher，只在乐视原生桌面上增加自己想要的 **Tab**：新闻、直播、豆瓣荐片、电台、股票。
 
-![桌面](docs/images/news-main.png)
+![桌面](docs/images/stock-main.jpg)
 
 ## 这是什么
 
@@ -31,6 +31,8 @@
 
 ### 直播
 
+![直播](docs/images/live-main.jpg)
+
 - 读 `/sdcard/tvdesk/直播源.txt`（DIYP 格式，`#` 开头为分组）
 - IJK 播放器 + 低延迟参数（`overlay-format=fcc-rv32`、大缓冲）
 - 台名自动清理（去掉「高清」「超高清」「现网」等后缀）
@@ -38,16 +40,22 @@
 
 ### 豆瓣荐片
 
+![豆瓣荐片](docs/images/douban-main.jpg)
+
 - 热播电影 / 热播剧集 / 热播综艺 / 国产剧 / 美剧 / 韩剧 / 日剧 / 动画电影 / 国漫 / 日漫 / 纪录片 / 高分
 - 海报网格 + 详情，点播交给 TVBox
 
 ### 电台
+
+![电台](docs/images/radio-main.jpg)
 
 - 分类：新闻广播、音乐电台、财经电台、少儿故事、全部电台
 - 默认首个为「中国之声」
 - 底部播放条可用遥控器聚焦操作
 
 ### 股票
+
+![股票](docs/images/stock-main.jpg)
 
 六个分栏，遥控器左右切换：
 
