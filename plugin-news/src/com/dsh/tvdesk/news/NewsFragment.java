@@ -96,15 +96,19 @@ public class NewsFragment extends BaseFragment {
     private final java.util.Map<String, java.util.List<Block>> mDocCache =
             new java.util.HashMap<String, java.util.List<Block>>();
     private FrameLayout mVoicePanel;
-    private int mVoiceSel = 0;          // 音色选择：下标指向 mVoiceOpts
-    // 音色选项：{"kind","param","display"}；kind=baidu/edge
-    private final java.util.List<String[]> mVoiceOpts = new java.util.ArrayList<String[]>();
+    /** 引擎：0=百度在线，1=微软 edge（经 OpenWrt 桥） */
+    private int mEngineIdx = 1;
+    /** 当前引擎里的音色下标 */
+    private int mVoiceSel = 0;
     private static final String[][] EDGE_VOICES = {
         {"zh-CN-YunxiNeural", "微软·云希(男)"},
         {"zh-CN-YunjianNeural", "微软·云健(男)"},
         {"zh-CN-XiaoxiaoNeural", "微软·晓晓(女)"}
     };
-    private TextView[] mVoiceRows = new TextView[3];
+    private static final String[][] BAIDU_VOICES = {
+        {"", "百度在线"}
+    };
+    private TextView[] mVoiceRows = new TextView[4];
 
     private final List<List<Item>> mData = new ArrayList<>();
     private final long[] mLoadedAt = new long[32];
@@ -122,9 +126,11 @@ public class NewsFragment extends BaseFragment {
     private java.util.List<String> mChunks = new ArrayList<String>();
     private int mChunkIdx = 0;
     private final Object mPrefLock = new Object();
-    private File mPref = null;      // 预取的下一块 mp3
+    private File mPref = null;      // 预取好的下一块 mp3
     private int mPrefIdx = -1;      // mPref 对应的块号
+    private int mPrefItem = -1;     // mPref 对应的新闻下标（跨条预取用）
     private int mPrefTarget = -1;   // 正在后台合成的目标块号
+    private int mPrefTargetItem = -1;
     private int mReadIndex = -1;
     private int mSpeedIdx = 1;
     /** 每次合成一个独立的 mp3 文件名：预取下一段时不会覆盖正在播放的那一段 */
@@ -410,9 +416,11 @@ public class NewsFragment extends BaseFragment {
         if (mDensity <= 0) mDensity = 2;
         try {
             mSpeedIdx = ctx.getSharedPreferences("tvdesk_news", 0).getInt("speed", 1);
+            mEngineIdx = ctx.getSharedPreferences("tvdesk_news", 0).getInt("engine", 1);
             mVoiceSel = ctx.getSharedPreferences("tvdesk_news", 0).getInt("voice", 0);
         } catch (Throwable ignored) { }
-        buildVoiceOpts();
+        if (mEngineIdx < 0 || mEngineIdx > 1) mEngineIdx = 1;
+        mVoiceSel = clampVoice(mVoiceSel);
         FrameLayout root = new FrameLayout(ctx);        root.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.setPadding(dp(26), dp(100), dp(26), dp(10));
@@ -726,7 +734,7 @@ public class NewsFragment extends BaseFragment {
         hl.bottomMargin = dp(10);
         box.addView(h, hl);
 
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < mVoiceRows.length; i++) {
             final int idx = i;
             TextView row = new TextView(ctx);
             row.setTextSize(15f);
@@ -890,22 +898,34 @@ public class NewsFragment extends BaseFragment {
 
     private void refreshVoiceRows() {
         if (mVoiceRows[0] == null) return;
-        mVoiceRows[0].setText("音色：" + currentVoiceName() + "  （按确定切换）");
-        mVoiceRows[1].setText("语速：" + speedLabel() + "  （按确定切换）");
-        mVoiceRows[2].setText("关闭");
+        mVoiceRows[0].setText("引擎：" + engineName() + "  （按确定切换）");
+        mVoiceRows[1].setText("音色：" + currentVoiceName() + "  （按确定切换）");
+        mVoiceRows[2].setText("语速：" + speedLabel() + "  （按确定切换）");
+        mVoiceRows[3].setText("关闭");
     }
-
-    /** 打开当前 TTS 引擎自己的设置界面（讯飞等可以在这里选男声） */
-
 
     private String speedLabel() {
         return "x" + String.format(Locale.US, "%.1f", SPEEDS[mSpeedIdx]);
     }
 
+    private String engineName() {
+        return mEngineIdx == 1 ? "微软 Edge" : "百度在线";
+    }
+
+    /** 当前引擎可选的音色表：{接口参数, 显示名} */
+    private String[][] voices() {
+        return mEngineIdx == 1 ? EDGE_VOICES : BAIDU_VOICES;
+    }
+
+    private int clampVoice(int v) {
+        int n = voices().length;
+        return (v < 0 || v >= n) ? 0 : v;
+    }
+
     private void openVoicePanel() {
         refreshVoiceRows();
         mVoicePanel.setVisibility(View.VISIBLE);
-        if (mVoiceRows[2] != null) mVoiceRows[2].requestFocus();
+        if (mVoiceRows[3] != null) mVoiceRows[3].requestFocus();
     }
 
     private void closeVoicePanel() {
@@ -913,88 +933,77 @@ public class NewsFragment extends BaseFragment {
         if (mVoiceBar != null) mVoiceBar.requestFocus();
     }
 
-    // ---------------- 音色切换（百度在线 + 微软Edge男/女声，经 OpenWrt 桥） ----------------
+    // ---------------- 引擎 / 音色 / 语速 ----------------
     private String currentKind() {
-        if (mVoiceOpts.isEmpty()) return "baidu";
-        int i = Math.max(0, Math.min(mVoiceSel, mVoiceOpts.size() - 1));
-        return mVoiceOpts.get(i)[0];
+        return mEngineIdx == 1 ? "edge" : "baidu";
     }
 
     private String currentParam() {
-        if (mVoiceOpts.isEmpty()) return "";
-        int i = Math.max(0, Math.min(mVoiceSel, mVoiceOpts.size() - 1));
-        return mVoiceOpts.get(i)[1];
-    }
-
-    /** 构建音色选项：百度在线 + 微软Edge(含男声) */
-    private void buildVoiceOpts() {
-        mVoiceOpts.clear();
-        mVoiceOpts.add(new String[]{"baidu", "", "百度在线"});
-        for (String[] ev : EDGE_VOICES) {
-            mVoiceOpts.add(new String[]{"edge", ev[0], ev[1]});
-        }
-        if (mVoiceSel >= mVoiceOpts.size()) {
-            mVoiceSel = 0;
-            try { mCtx.getSharedPreferences("tvdesk_news", 0).edit().putInt("voice", 0).apply(); }
-            catch (Throwable ignored) { }
-        }
-    }
-
-    /** 音色选项数 */
-    private int voiceOptionCount() {
-        return Math.max(1, mVoiceOpts.size());
+        return voices()[clampVoice(mVoiceSel)][0];
     }
 
     /** 当前音色的可读名（语音条/面板显示） */
     private String currentVoiceName() {
-        if (mVoiceOpts.isEmpty()) return "百度在线";
-        int i = Math.max(0, Math.min(mVoiceSel, mVoiceOpts.size() - 1));
-        return mVoiceOpts.get(i)[2];
+        return voices()[clampVoice(mVoiceSel)][1];
+    }
+
+    /** 音色选项数 */
+    private int voiceOptionCount() {
+        return voices().length;
     }
 
     private void onVoiceRow(int idx) {
-        if (idx == 2) {
-            closeVoicePanel();
+        if (idx == 3) { closeVoicePanel(); return; }
+        if (idx == 0) {
+            mEngineIdx = (mEngineIdx + 1) % 2;
+            mVoiceSel = 0;
+            try {
+                mCtx.getSharedPreferences("tvdesk_news", 0).edit()
+                        .putInt("engine", mEngineIdx).putInt("voice", 0).apply();
+            } catch (Throwable ignored) { }
+            refreshVoiceRows();
+            updateVoiceBar();
+            restartSpeech();
             return;
         }
-        if (idx == 0) {
-            // 音色循环：百度在线 -> 讯飞各音色
+        if (idx == 1) {
             int n = voiceOptionCount();
-            if (n <= 1) { status("未找到可用音色"); return; }
+            if (n <= 1) { status("这个引擎只有一种音色"); return; }
             mVoiceSel = (mVoiceSel + 1) % n;
             try {
                 mCtx.getSharedPreferences("tvdesk_news", 0).edit().putInt("voice", mVoiceSel).apply();
             } catch (Throwable ignored) { }
             refreshVoiceRows();
             updateVoiceBar();
-            if (mReading && mReadIndex >= 0 && mReadIndex < mFlat.size()) {
-                // 立即用新音色重播当前这一条
-                releasePlayer();
-                mChunks = splitChunks(currentText(mFlat.get(mReadIndex)));
-                mChunkIdx = 0;
-                speakChunk(mReadIndex);
-            }
+            restartSpeech();
             return;
         }
+        // 语速
         mSpeedIdx = (mSpeedIdx + 1) % SPEEDS.length;
         try {
             mCtx.getSharedPreferences("tvdesk_news", 0).edit().putInt("speed", mSpeedIdx).apply();
         } catch (Throwable ignored) { }
         refreshVoiceRows();
         updateVoiceBar();
-        if (mReading && mReadIndex >= 0 && mReadIndex < mFlat.size()) {
-            // 立即用新语速重播当前这一条
-            releasePlayer();
-            mChunks = splitChunks(currentText(mFlat.get(mReadIndex)));
-            mChunkIdx = 0;
-            speakChunk(mReadIndex);
-        }
+        restartSpeech();
     }
 
+    /** 换了引擎/音色/语速：立刻用新参数重播当前这一条（轮播时只重播标题） */
+    private void restartSpeech() {
+        if (!mReading || mReadIndex < 0 || mReadIndex >= mFlat.size()) return;
+        releasePlayer();
+        clearPrefetch();
+        Item it = mFlat.get(mReadIndex);
+        String text = mChain ? speakTitle(it.title) : currentText(it);
+        mChunks = splitChunks(text);
+        mChunkIdx = 0;
+        speakChunk(mReadIndex);
+    }
 
     private void updateVoiceBar() {
         if (mVoiceBar == null) return;
-        mVoiceBar.setText("音色：" + currentVoiceName() + "  ·  " + speedLabel() + "  ▪ 按确定设置");
+        mVoiceBar.setText(engineName() + " · " + currentVoiceName() + "  ·  "
+                + speedLabel() + "  ▪ 按确定设置");
     }
 
     private GradientDrawable panelBg() {
@@ -1257,12 +1266,67 @@ public class NewsFragment extends BaseFragment {
         while (m.find()) {
             if (m.group(1) != null) {
                 String t = stripHtml(clean(m.group(1)));
+                if (isTailMarker(t)) break;          // 相关阅读/责任编辑…：后面全是别的标题
+                int cut = tailCutIndex(t);           // 尾巴常和正文挤在同一段里
+                if (cut >= 0) {
+                    String head = t.substring(0, cut).trim();
+                    if (head.length() > 8 && !isNoiseLine(head)) out.add(new Block(1, head));
+                    break;
+                }
                 if (t.length() > 8 && !isNoiseLine(t)) {
                     out.add(new Block(1, t));
                 }
             }
         }
+        // 结尾常被塞一串别的新闻标题（没有句号、十几个字）：连着两条以上才当尾巴剔掉
+        int tail = 0;
+        for (int i = out.size() - 1; i >= 0; i--) {
+            Block b = out.get(i);
+            if (b.type == 1 && isTitleLike(b.text)) tail++;
+            else break;
+        }
+        if (tail >= 2) {
+            for (int k = 0; k < tail; k++) out.remove(out.size() - 1);
+        }
         return out;
+    }
+
+    /** 正文结束标志：这些行之后就是相关推荐 / 其他标题 */
+    private static boolean isTailMarker(String t) {
+        if (t == null) return false;
+        String s = t.trim();
+        if (s.length() == 0 || s.length() > 20) return false;
+        String[] marks = {"相关阅读", "相关推荐", "相关新闻", "热门推荐", "猜你喜欢",
+                "延伸阅读", "推荐阅读", "更多新闻", "更多精彩", "责任编辑",
+                "原标题", "编辑：", "编辑:", "来源：", "来源:", "点击查看更多"};
+        for (String mk : marks) if (s.contains(mk)) return true;
+        return false;
+    }
+
+    /** 尾巴标记出现在段落中间时，返回截断位置；没有则 -1 */
+    private static int tailCutIndex(String t) {
+        if (t == null) return -1;
+        String s = t;
+        String[] marks = {"（完）", "(完)", "【编辑", "责任编辑", "更多精彩内容",
+                "更多新闻", "相关阅读", "相关推荐", "推荐阅读", "热门推荐",
+                "发表评论", "文明上网理性发言", "国际新闻精选", "国内新闻精选",
+                "原标题", "点击查看更多", "扫一扫", "打开APP"};
+        int best = -1;
+        for (String mk : marks) {
+            int i = s.indexOf(mk);
+            if (i > 0 && (best < 0 || i < best)) best = i;
+        }
+        // 太靠前说明整段都是这类内容（导航/声明），交给 isNoiseLine 处理
+        return (best > 12) ? best : -1;
+    }
+
+    /** 像标题的短句：没有句末标点（正文段落一般都有句号） */
+    private static boolean isTitleLike(String t) {
+        String s = t.trim();
+        if (s.length() > 42) return false;
+        if (s.length() < 6) return true;
+        char c = s.charAt(s.length() - 1);
+        return "。！？…”』」）)!?.".indexOf(c) < 0;
     }
 
     /** 按块渲染：文字段落 + 图片，像网页一样顺序排 */
@@ -1553,7 +1617,11 @@ public class NewsFragment extends BaseFragment {
         }
         mFocus = index;
         int slot = index - mOffset;
-        if (slot >= 0 && slot < ROWS && mRows[slot] != null) mRows[slot].requestFocus();
+        // 设置面板开着的时候别抢焦点，否则面板里的选中框会"消失"
+        boolean panelOpen = mVoicePanel != null && mVoicePanel.getVisibility() == View.VISIBLE;
+        if (!panelOpen && slot >= 0 && slot < ROWS && mRows[slot] != null) {
+            mRows[slot].requestFocus();
+        }
         updateSide();
         refreshRows();
         mChain = true;
@@ -1564,7 +1632,7 @@ public class NewsFragment extends BaseFragment {
     private void speak(final String text, final int index) {
         mChunks = splitChunks(text);
         mChunkIdx = 0;
-        clearPrefetch();
+        // 不清预取：轮播时上一条最后一块播完时，已经顺手把这条的标题合成好了
         speakChunk(index);
     }
 
@@ -1603,10 +1671,10 @@ public class NewsFragment extends BaseFragment {
         final String part = mChunks.get(ci);
         final String kind = currentKind();
         // 预取命中：直接播放该块并预取下一块（消除块间合成等待）
-        File ready = takePrefetched(ci);
+        File ready = takePrefetched(index, ci);
         if (ready != null) {
             playFile(ready, index);
-            prefetchChunk(ci + 1);
+            prefetchNext(index, ci + 1);
             return;
         }
         // 未预取（首块/跳变）：后台合成，播完再接下一块
@@ -1615,10 +1683,10 @@ public class NewsFragment extends BaseFragment {
                 final File f = synthChunk(kind, part);
                 mMain.post(new Runnable() {
                     @Override public void run() {
-                        if (!mReading || mChunkIdx != ci) return;
+                        if (!mReading || mChunkIdx != ci || index != mReadIndex) return;
                         if (f == null) { Log.w("tts synth fail"); stopReading(); return; }
                         playFile(f, index);
-                        prefetchChunk(ci + 1);
+                        prefetchNext(index, ci + 1);
                     }
                 });
             }
@@ -1635,49 +1703,79 @@ public class NewsFragment extends BaseFragment {
         return download(baiduUrl(part), "tts_b" + mTtsSeq.incrementAndGet() + ".mp3");
     }
 
-    /** 后台预取第 ci 块（仅当其仍是目标块时才写入缓存） */
-    private void prefetchChunk(final int ci) {
-        if (ci >= mChunks.size()) return;
-        final String part = mChunks.get(ci);
+    /**
+     * 预取：本条的下一块；本条最后一块时，顺手预取**下一条的标题**，
+     * 轮播切条时就不用再等一次合成（之前切条有 1 秒左右的空档）
+     */
+    private void prefetchNext(final int index, final int ci) {
+        if (ci < mChunks.size()) {
+            prefetchChunk(index, ci, mChunks.get(ci));
+        } else if (mChain && index + 1 < mFlat.size()) {
+            prefetchChunk(index + 1, 0, speakTitle(mFlat.get(index + 1).title));
+        }
+    }
+
+    /** 后台预取 (item, ci) 这一块（仅当其仍是目标块时才写入缓存） */
+    private void prefetchChunk(final int item, final int ci, final String part) {
         final String kind = currentKind();
-        synchronized (mPrefLock) { mPrefTarget = ci; }
+        synchronized (mPrefLock) {
+            mPrefTargetItem = item;
+            mPrefTarget = ci;
+        }
         new Thread(new Runnable() {
             @Override public void run() {
                 final File f = synthChunk(kind, part);
                 synchronized (mPrefLock) {
-                    if (mPrefTarget == ci) { mPref = f; mPrefIdx = ci; }
+                    if (mPrefTargetItem == item && mPrefTarget == ci) {
+                        mPref = f; mPrefIdx = ci; mPrefItem = item;
+                    }
                 }
             }
         }, "tts-prefetch").start();
     }
 
-    /** 取走已预取的 ci 块；没有则返回 null */
-    private File takePrefetched(int ci) {
+    /** 取走已预取的 (item, ci) 块；没有则返回 null */
+    private File takePrefetched(int item, int ci) {
         synchronized (mPrefLock) {
-            if (mPref != null && mPrefIdx == ci) {
-                File f = mPref; mPref = null; mPrefIdx = -1; return f;
+            if (mPref != null && mPrefIdx == ci && mPrefItem == item) {
+                File f = mPref; mPref = null; mPrefIdx = -1; mPrefItem = -1; return f;
             }
             return null;
         }
     }
 
     private void clearPrefetch() {
-        synchronized (mPrefLock) { mPref = null; mPrefIdx = -1; mPrefTarget = -1; }
+        synchronized (mPrefLock) {
+            mPref = null; mPrefIdx = -1; mPrefItem = -1;
+            mPrefTarget = -1; mPrefTargetItem = -1;
+        }
     }
 
     /** 微软男/女声：经 OpenWrt 常开桥服务（edge-tts）合成，返回 mp3 文件或 null。
      *  说明：Android 5 的 TLS 指纹被微软 Edge 服务拉黑（403），电视无法自己直连微软，
-     *  故改调局域网内 24h 常开的 OpenWrt 上的 edge-tts 桥接服务。 */
+     *  故改调局域网内 24h 常开的 OpenWrt 上的 edge-tts 桥接服务。
+     *  语速走 edge 的 rate 参数（"+20%" / "-20%"），不传就等于默认 1.0。 */
     private File edgeSpeak(String text, String voice) {
         if (text == null || text.isEmpty()) return null;
         try {
             String url = "http://192.168.1.22:8123/tts?voice="
                     + java.net.URLEncoder.encode(voice, "UTF-8")
+                    + "&rate=" + java.net.URLEncoder.encode(edgeRate(), "UTF-8")
                     + "&text=" + java.net.URLEncoder.encode(text, "UTF-8");
             return download(url, "tts_e" + mTtsSeq.incrementAndGet() + ".mp3");
         } catch (Throwable t) {
             Log.w("edge http fail " + t);
             return null;
+        }
+    }
+
+    /** x0.8 → -20%，x1.0 → +0%，x1.2 → +20%，x1.5 → +50% */
+    private String edgeRate() {
+        switch (mSpeedIdx) {
+            case 0: return "-20%";
+            case 2: return "+20%";
+            case 3: return "+50%";
+            default: return "+0%";
         }
     }
 
