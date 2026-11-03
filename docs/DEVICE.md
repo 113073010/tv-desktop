@@ -28,7 +28,7 @@
 
 | 文件 | 大小 | MD5 | 说明 |
 |---|---:|---|---|
-| `news.apk` | 45455 | `F41992C7F7DAE4B61793AFF627366775` | 新闻 1.0.9 / 59 |
+| `news.apk` | 45455 | `138F761AC67AA3292C5372F4D0CF971C` | 新闻 1.0.10 / 60 |
 | `live.apk` | 61839 | `4694EA88D87672AC93EA0404C3A6FA4F` | 直播 1.4.0 / 27 |
 | `douban.apk` | 24975 | `272F5971C10D3F078A0AA2BCE60A63B5` | 豆瓣荐片 1.0.1 / 46 |
 | `radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` | 电台 1.4.4 / 26 |
@@ -69,6 +69,57 @@
 > 这次设备的 `plugins_data/com.dsh.tvdesk.news/dex/news.dex` 时间戳和 APK 一致，
 > 说明 dex 缓存是新的；但 DB 元数据仍是旧的。两者不一致时，行为取决于桌面有没有重新生成缓存，
 > 所以不要靠「看起来能跑」来判断，直接对 MD5。
+
+---
+
+## 语音朗读：小数点被“断句”吞掉（1.0.10 已修）
+
+**现象**：微软 Edge 朗读全文时，`3.5` 读成“三五”，小数点的“点”不见了；
+同一段文字直接送进 Edge 桥却读得好好的，只有长文才复现。
+
+**定位**：不是 Edge 的问题。用桥实测：
+
+| 文本 | 音频时长 | 说明 |
+|---|---:|---|
+| `同比增长3.5倍` | 1.296s | 与 `同比增长三点五倍` 完全一致，点正常读 |
+| `同比增长3.` | 1.080s | 段尾的点被当成句号 |
+| `5倍` | 0.936s | 下一段从数字开头 |
+
+`NewsFragment.splitChunks()` 按 `。！？；，.` 切段，把 ASCII 的 `.` 也当断句符。
+切点落在小数点上时，`3.` 和 `5` 被送成两次合成，Edge 把段尾的 `.` 当句号，
+“点”就丢了；标题短、不会触发切段，所以只有“朗读全文”能复现。
+
+**改法**（`plugin-news/src/.../NewsFragment.java`）：
+
+- `findCut()`：ASCII `.` 只有后面跟空格（真正的英文句号）才允许断句；
+  小数点、`www.xxx.com` 里的点一律跳过
+- `snapTokenEnd()`：切点如果落在一个「不可劈开」的串中间（数字 / 字母 /
+  `.` `,` `:` `%` `/` `-` `_` `?` `&` `=` `#` `@` `~` `+`），就把切点挪到整串外面，
+  保证 `3.5`、`12:30`、`v1.2.3`、`1,234.5`、网址都不会被劈成两段
+- 新增 `isDigit()` / `isTokenChar()` 辅助方法，`splitChunks()` 改为静态方法便于离线自测
+- 新增离线回归测试 `plugin-news/test/TestSplitChunks.java`：反射调用真正的
+  `splitChunks()`，覆盖硬切碰数字、标点切点、时间、版本号、千分位、百分数、网址、短句
+
+> 桥上的对照数据：`3.5` 与 `三点五` 的 mp3 长度完全相同（15408 字节），
+> 说明只要数字完整，Edge 自己会读成“三点五”。
+
+真机上还能直接看发出去的文本：电视 root，`tcpdump -i wlan0 -w /data/local/tmp/tts.pcap tcp port 8123`，
+朗读后把 pcap 拉回电脑，解出每条 `GET /tts?...text=` 的分段。1.0.10 实测“科技”头条，一共 7 段，
+`7,665.2 亿元人民币`、`同比增长4.5%`、`回升0.2个百分点` 都完整落在段内。
+
+把 7 段拼回原文再用**旧算法**跑一遍，第 2 段正好停在 `…现汇率约合 7,665.`，
+第 3 段从数字开头——这就是“点”被吞掉的现场；新算法把切点提前到前一个逗号，数字保持完整。
+
+跑一遍离线测试（先执行过 `plugin-news/build.ps1`）：
+
+```powershell
+$root  = "D:\deepseek\tv-desktop"
+$proj  = "$root\repo\plugin-news"
+$cp    = "$proj\build\classes;$proj\build\stubs.jar;$root\tools\android-sdk\platforms\android-34\android.jar"
+& "$root\tools\jdk\jdk-17.0.20.1+1\bin\javac.exe" -encoding UTF-8 `
+    -cp $cp -d "$root\tmp\chunktest" "$proj\test\TestSplitChunks.java"
+& "$root\tools\jdk\jdk-17.0.20.1+1\bin\java.exe" -cp "$root\tmp\chunktest;$cp" TestSplitChunks
+```
 
 ---
 

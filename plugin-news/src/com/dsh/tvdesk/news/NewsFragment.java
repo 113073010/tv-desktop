@@ -1748,7 +1748,7 @@ public class NewsFragment extends BaseFragment {
     }
 
     /** 把长文本按标点切成 <=80 字的小段（百度在线合成对长度敏感） */
-    private java.util.List<String> splitChunks(String text) {
+    private static java.util.List<String> splitChunks(String text) {
         java.util.List<String> out = new ArrayList<String>();
         if (text == null) return out;
         String t = text.replaceAll("\\s+", " ").trim();
@@ -1756,20 +1756,66 @@ public class NewsFragment extends BaseFragment {
         while (start < t.length()) {
             int end = Math.min(start + 80, t.length());
             if (end < t.length()) {
-                int cut = -1;
-                for (int k = end; k > start + 20; k--) {
-                    char c = t.charAt(k - 1);
-                    if (c == '。' || c == '！' || c == '？' || c == '；' || c == '，' || c == '.') {
-                        cut = k;
-                        break;
-                    }
-                }
+                int cut = findCut(t, start, end);
                 if (cut > start) end = cut;
             }
+            end = snapTokenEnd(t, start, end);
             out.add(t.substring(start, end));
             start = end;
         }
         return out;
+    }
+
+    /**
+     * 在 [start+20, end] 里找最后一个能断句的标点。
+     *
+     * 小数点（3.5）和网址里的点（abc.com）不能当断句：一旦切在点后面，
+     * 下一段就从数字开头，微软语音会把段尾那个点当成句号，小数点的“点”
+     * 就不读了（整段送进去时它读得好好的，只有被切开才丢）。
+     * 所以 ASCII 的 '.' 只在后面跟空格（真正的英文句号）时才断。
+     */
+    private static int findCut(String t, int start, int end) {
+        for (int k = end; k > start + 20; k--) {
+            char c = t.charAt(k - 1);
+            if (c == '.') {
+                boolean decimal = k >= 2 && k < t.length()
+                        && isDigit(t.charAt(k - 2)) && isDigit(t.charAt(k));
+                boolean sentenceEnd = (k >= t.length()) || t.charAt(k) == ' ';
+                if (decimal || !sentenceEnd) continue;
+                return k;
+            }
+            if (c == '。' || c == '！' || c == '？' || c == '；' || c == '，') return k;
+        }
+        return -1;
+    }
+
+    private static boolean isDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    /** 切点落在数字 / 网址 / 英文单词中间时，挪到整串外面，别把一个数或一个网址劈成两半 */
+    private static int snapTokenEnd(String t, int start, int end) {
+        if (end <= start || end >= t.length()) return end;
+        if (!(isTokenChar(t.charAt(end - 1)) && isTokenChar(t.charAt(end)))) return end;
+        int a = end;
+        while (a > start && isTokenChar(t.charAt(a - 1))) a--;
+        int b = end;
+        while (b < t.length() && isTokenChar(t.charAt(b))) b++;
+        if (a > start && end - a <= b - end) return a;
+        return b;
+    }
+
+    /**
+     * 不能从中间劈开的字符：数字、字母，以及数字/网址里常见的 . , : % / - _ ? & = # @ ~ +。
+     * 中文汉字不在内——汉字之间随时可以断。
+     */
+    private static boolean isTokenChar(char c) {
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+            return true;
+        }
+        return c == '.' || c == ',' || c == ':' || c == '%' || c == '/'
+                || c == '-' || c == '_' || c == '?' || c == '&' || c == '='
+                || c == '#' || c == '@' || c == '~' || c == '+';
     }
 
     private void speakChunk(final int index) {
