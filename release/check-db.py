@@ -116,6 +116,8 @@ def main():
         row_md5 = str(row["MD5"] or "").upper()
         row_vname = str(row["VERSION_NAME"] or "")
         row_vcode = str(row["VERSION_CODE"] or "")
+        exp_path = "/data/data/com.stv.launcher/files/plugins/%s.apk" % name
+        exp_file = name + ".apk"
 
         fix_errs = []
         hard_errs = []
@@ -127,6 +129,10 @@ def main():
             fix_errs.append("版本名 %s→%s" % (row_vname or "空", vname))
         if vcode and row_vcode != vcode:
             fix_errs.append("vcode %s→%s" % (row_vcode or "空", vcode))
+        if str(row["PLUGIN_PATH"] or "") != exp_path:
+            fix_errs.append("路径 %s→%s" % (row["PLUGIN_PATH"] or "空", exp_path))
+        if str(row["FILE_NAME"] or "") != exp_file:
+            fix_errs.append("文件名 %s→%s" % (row["FILE_NAME"] or "空", exp_file))
         if str(row["SHOW_ON_TAB"]) != "1":
             hard_errs.append("SHOW_ON_TAB=%s（需手工改）" % row["SHOW_ON_TAB"])
 
@@ -140,9 +146,7 @@ def main():
             problems.append((label, "；".join(fix_errs), True))
             if args.fix:
                 fixes.append((pkg, size, md5, vname or row_vname,
-                              vcode or row_vcode,
-                              "/data/data/com.stv.launcher/files/plugins/%s.apk" % (name + ".apk"),
-                              name + ".apk"))
+                              vcode or row_vcode, exp_path, exp_file))
         if hard_errs:
             problems.append((label, "；".join(hard_errs), False))
 

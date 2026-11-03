@@ -103,6 +103,10 @@ for n in $NAMES; do
 done
 
 echo "== 替换数据库 =="
+# 这台机器的桌面会被系统在 1 秒内重新拉起，它一起来就把 SCREEN_INFO 读进内存页缓存；
+# 要是中间留了 sleep，之后它写库（HAS_USED 之类）会把旧页刷回来，覆盖下面刚写进去的
+# MD5 / 版本号。所以换库前后不留窗口：先再 kill 一次，立刻写、立刻起。
+busybox killall -9 com.stv.launcher 2>/dev/null
 rm -f "$DB-journal"
 cat "$DIR/launcher_new.db" > "$DB" || { echo "  数据库替换失败"; exit 5; }
 chown system:system "$DB" 2>/dev/null

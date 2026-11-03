@@ -150,6 +150,22 @@ $cp    = "$proj\build\classes;$proj\build\stubs.jar;$root\tools\android-sdk\plat
 
 ---
 
+## 换数据库别留 sleep 窗口（2026-11-03 踩到）
+
+桌面被 `kill -9` 后大约 **1 秒**就会被系统重新拉起。如果按老流程「kill → sleep 1 → 写库」，桌面起来时已经把旧 `SCREEN_INFO` 读进内存页缓存，等它下一次写库（`HAS_USED` 之类）就用旧页把刚写进去的 MD5 / 版本号刷回去——插件加载的是新 dex，但元数据又变回旧的。
+
+现在 `restore.sh` 在换库前再 `busybox killall -9` 一次，并去掉写库前的 sleep：`kill → rm -f *-journal → cat → sync → am start` 全在 1 秒内跑完。单插件更新时同理：这次更新新闻（1.0.15）第一次留了 sleep，写完 `SCREEN_INFO` 又变回 1.0.14 / `06927007…`，去掉窗口重写后才稳定在 1.0.15 / `CAA9ED23…`。
+
+顺带一个判断「电视上跑的到底是哪份代码」的笨办法——直接在缓存的 dex 里搜新类的名字：
+
+```bash
+adb shell su -c 'busybox grep -a -c RootFrame /data/data/com.stv.launcher/files/plugins_data/com.dsh.tvdesk.news/dex/news.dex'
+```
+
+返回 >0 说明新构建已经生效（`RootFrame` 是 1.0.15 才加的根容器类）。
+
+---
+
 ## 存储布局
 
 ### 频道表

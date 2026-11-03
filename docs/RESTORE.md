@@ -156,7 +156,7 @@ INSERT INTO SCREEN_INFO (
 
 ```bash
 python release/check-db.py          # 只检查，逐项打印是否一致
-python release/check-db.py --fix    # 把大小 / MD5 / 版本号写回 launcher_new.db
+python release/check-db.py --fix    # 把大小 / MD5 / 版本号 / 插件路径写回 launcher_new.db
 ```
 
 它会：
@@ -164,6 +164,7 @@ python release/check-db.py --fix    # 把大小 / MD5 / 版本号写回 launcher
 - 从 `release/*.apk` 计算真实大小和 MD5
 - 从 `plugin-*/AndroidManifest.xml` 读 `versionName` / `versionCode`
 - 对比 `launcher_new.db` 里的五条记录
+- 顺带核对 `PLUGIN_PATH` / `FILE_NAME`（老版本 `--fix` 会把路径拼成 `news.apk.apk`，这一版已修）
 - `--fix` 时只改这五条，不动「首页 / 应用」
 
 然后重新 `adb push release/`，再跑 `restore.sh`。

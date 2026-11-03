@@ -128,7 +128,7 @@
 python release/check-db.py --fix
 ```
 
-它会把 `SCREEN_INFO` 里的 `FILE_SIZE` / `MD5` / 版本号与新 APK 对齐；`restore.sh` 也会在覆盖前检查，不一致就拒绝执行（除非加 `--force`）。
+它会把 `SCREEN_INFO` 里的 `FILE_SIZE` / `MD5` / 版本号 / 插件路径与新 APK 对齐；`restore.sh` 也会在覆盖前检查，不一致就拒绝执行（除非加 `--force`）。
 
 详细安装教程放在 [docs/RESTORE.md](docs/RESTORE.md)，真机实测记录放在 [docs/DEVICE.md](docs/DEVICE.md)。
 
