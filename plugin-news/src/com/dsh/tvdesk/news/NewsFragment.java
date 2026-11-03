@@ -96,7 +96,15 @@ public class NewsFragment extends BaseFragment {
     private final java.util.Map<String, java.util.List<Block>> mDocCache =
             new java.util.HashMap<String, java.util.List<Block>>();
     private FrameLayout mVoicePanel;
-    private TextView[] mVoiceRows = new TextView[2];
+    private int mVoiceSel = 0;          // 音色选择：下标指向 mVoiceOpts
+    // 音色选项：{"kind","param","display"}；kind=baidu/edge
+    private final java.util.List<String[]> mVoiceOpts = new java.util.ArrayList<String[]>();
+    private static final String[][] EDGE_VOICES = {
+        {"zh-CN-YunxiNeural", "微软·云希(男)"},
+        {"zh-CN-YunjianNeural", "微软·云健(男)"},
+        {"zh-CN-XiaoxiaoNeural", "微软·晓晓(女)"}
+    };
+    private TextView[] mVoiceRows = new TextView[3];
 
     private final List<List<Item>> mData = new ArrayList<>();
     private final long[] mLoadedAt = new long[32];
@@ -113,8 +121,15 @@ public class NewsFragment extends BaseFragment {
     private final java.util.Map<String, String> mFullCache = new java.util.HashMap<String, String>();
     private java.util.List<String> mChunks = new ArrayList<String>();
     private int mChunkIdx = 0;
+    private final Object mPrefLock = new Object();
+    private File mPref = null;      // 预取的下一块 mp3
+    private int mPrefIdx = -1;      // mPref 对应的块号
+    private int mPrefTarget = -1;   // 正在后台合成的目标块号
     private int mReadIndex = -1;
     private int mSpeedIdx = 1;
+    /** 每次合成一个独立的 mp3 文件名：预取下一段时不会覆盖正在播放的那一段 */
+    private static final java.util.concurrent.atomic.AtomicInteger mTtsSeq =
+            new java.util.concurrent.atomic.AtomicInteger();
     // TTS 相关已移除，仅保留百度在线合成
     private int mVoiceIdx = 0;
 
@@ -395,10 +410,10 @@ public class NewsFragment extends BaseFragment {
         if (mDensity <= 0) mDensity = 2;
         try {
             mSpeedIdx = ctx.getSharedPreferences("tvdesk_news", 0).getInt("speed", 1);
+            mVoiceSel = ctx.getSharedPreferences("tvdesk_news", 0).getInt("voice", 0);
         } catch (Throwable ignored) { }
-
-        FrameLayout root = new FrameLayout(ctx);
-        root.setLayoutParams(new ViewGroup.LayoutParams(
+        buildVoiceOpts();
+        FrameLayout root = new FrameLayout(ctx);        root.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.setPadding(dp(26), dp(100), dp(26), dp(10));
         root.setClipChildren(false);
@@ -711,7 +726,7 @@ public class NewsFragment extends BaseFragment {
         hl.bottomMargin = dp(10);
         box.addView(h, hl);
 
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 3; i++) {
             final int idx = i;
             TextView row = new TextView(ctx);
             row.setTextSize(15f);
@@ -875,8 +890,9 @@ public class NewsFragment extends BaseFragment {
 
     private void refreshVoiceRows() {
         if (mVoiceRows[0] == null) return;
-        mVoiceRows[0].setText("语速：" + speedLabel() + "  （按确定切换）");
-        mVoiceRows[1].setText("关闭");
+        mVoiceRows[0].setText("音色：" + currentVoiceName() + "  （按确定切换）");
+        mVoiceRows[1].setText("语速：" + speedLabel() + "  （按确定切换）");
+        mVoiceRows[2].setText("关闭");
     }
 
     /** 打开当前 TTS 引擎自己的设置界面（讯飞等可以在这里选男声） */
@@ -889,7 +905,7 @@ public class NewsFragment extends BaseFragment {
     private void openVoicePanel() {
         refreshVoiceRows();
         mVoicePanel.setVisibility(View.VISIBLE);
-        if (mVoiceRows[1] != null) mVoiceRows[1].requestFocus();
+        if (mVoiceRows[2] != null) mVoiceRows[2].requestFocus();
     }
 
     private void closeVoicePanel() {
@@ -897,9 +913,67 @@ public class NewsFragment extends BaseFragment {
         if (mVoiceBar != null) mVoiceBar.requestFocus();
     }
 
+    // ---------------- 音色切换（百度在线 + 微软Edge男/女声，经 OpenWrt 桥） ----------------
+    private String currentKind() {
+        if (mVoiceOpts.isEmpty()) return "baidu";
+        int i = Math.max(0, Math.min(mVoiceSel, mVoiceOpts.size() - 1));
+        return mVoiceOpts.get(i)[0];
+    }
+
+    private String currentParam() {
+        if (mVoiceOpts.isEmpty()) return "";
+        int i = Math.max(0, Math.min(mVoiceSel, mVoiceOpts.size() - 1));
+        return mVoiceOpts.get(i)[1];
+    }
+
+    /** 构建音色选项：百度在线 + 微软Edge(含男声) */
+    private void buildVoiceOpts() {
+        mVoiceOpts.clear();
+        mVoiceOpts.add(new String[]{"baidu", "", "百度在线"});
+        for (String[] ev : EDGE_VOICES) {
+            mVoiceOpts.add(new String[]{"edge", ev[0], ev[1]});
+        }
+        if (mVoiceSel >= mVoiceOpts.size()) {
+            mVoiceSel = 0;
+            try { mCtx.getSharedPreferences("tvdesk_news", 0).edit().putInt("voice", 0).apply(); }
+            catch (Throwable ignored) { }
+        }
+    }
+
+    /** 音色选项数 */
+    private int voiceOptionCount() {
+        return Math.max(1, mVoiceOpts.size());
+    }
+
+    /** 当前音色的可读名（语音条/面板显示） */
+    private String currentVoiceName() {
+        if (mVoiceOpts.isEmpty()) return "百度在线";
+        int i = Math.max(0, Math.min(mVoiceSel, mVoiceOpts.size() - 1));
+        return mVoiceOpts.get(i)[2];
+    }
+
     private void onVoiceRow(int idx) {
-        if (idx == 1) {
+        if (idx == 2) {
             closeVoicePanel();
+            return;
+        }
+        if (idx == 0) {
+            // 音色循环：百度在线 -> 讯飞各音色
+            int n = voiceOptionCount();
+            if (n <= 1) { status("未找到可用音色"); return; }
+            mVoiceSel = (mVoiceSel + 1) % n;
+            try {
+                mCtx.getSharedPreferences("tvdesk_news", 0).edit().putInt("voice", mVoiceSel).apply();
+            } catch (Throwable ignored) { }
+            refreshVoiceRows();
+            updateVoiceBar();
+            if (mReading && mReadIndex >= 0 && mReadIndex < mFlat.size()) {
+                // 立即用新音色重播当前这一条
+                releasePlayer();
+                mChunks = splitChunks(currentText(mFlat.get(mReadIndex)));
+                mChunkIdx = 0;
+                speakChunk(mReadIndex);
+            }
             return;
         }
         mSpeedIdx = (mSpeedIdx + 1) % SPEEDS.length;
@@ -917,9 +991,10 @@ public class NewsFragment extends BaseFragment {
         }
     }
 
+
     private void updateVoiceBar() {
         if (mVoiceBar == null) return;
-        mVoiceBar.setText("音色：百度在线  ·  " + speedLabel() + "  ▪ 按确定设置");
+        mVoiceBar.setText("音色：" + currentVoiceName() + "  ·  " + speedLabel() + "  ▪ 按确定设置");
     }
 
     private GradientDrawable panelBg() {
@@ -1489,6 +1564,7 @@ public class NewsFragment extends BaseFragment {
     private void speak(final String text, final int index) {
         mChunks = splitChunks(text);
         mChunkIdx = 0;
+        clearPrefetch();
         speakChunk(index);
     }
 
@@ -1523,19 +1599,153 @@ public class NewsFragment extends BaseFragment {
             onSpeakFinished(index);
             return;
         }
-        final String part = mChunks.get(mChunkIdx);
+        final int ci = mChunkIdx;
+        final String part = mChunks.get(ci);
+        final String kind = currentKind();
+        // 预取命中：直接播放该块并预取下一块（消除块间合成等待）
+        File ready = takePrefetched(ci);
+        if (ready != null) {
+            playFile(ready, index);
+            prefetchChunk(ci + 1);
+            return;
+        }
+        // 未预取（首块/跳变）：后台合成，播完再接下一块
         new Thread(new Runnable() {
             @Override public void run() {
-                final File f = download(baiduUrl(part), "tts.mp3");
+                final File f = synthChunk(kind, part);
                 mMain.post(new Runnable() {
                     @Override public void run() {
-                        if (!mReading) return;
-                        if (f == null) { Log.w("tts download fail"); stopReading(); return; }
+                        if (!mReading || mChunkIdx != ci) return;
+                        if (f == null) { Log.w("tts synth fail"); stopReading(); return; }
                         playFile(f, index);
+                        prefetchChunk(ci + 1);
                     }
                 });
             }
         }, "tts-dl").start();
+    }
+
+    /** 合成一块：edge 走 OpenWrt 桥、失败回退百度；baidu 直连。返回 mp3 文件或 null */
+    private File synthChunk(String kind, String part) {
+        if ("edge".equals(kind)) {
+            File f = edgeSpeak(part, currentParam());
+            if (f != null) return f;
+            Log.w("edge fail, fallback baidu");
+        }
+        return download(baiduUrl(part), "tts_b" + mTtsSeq.incrementAndGet() + ".mp3");
+    }
+
+    /** 后台预取第 ci 块（仅当其仍是目标块时才写入缓存） */
+    private void prefetchChunk(final int ci) {
+        if (ci >= mChunks.size()) return;
+        final String part = mChunks.get(ci);
+        final String kind = currentKind();
+        synchronized (mPrefLock) { mPrefTarget = ci; }
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final File f = synthChunk(kind, part);
+                synchronized (mPrefLock) {
+                    if (mPrefTarget == ci) { mPref = f; mPrefIdx = ci; }
+                }
+            }
+        }, "tts-prefetch").start();
+    }
+
+    /** 取走已预取的 ci 块；没有则返回 null */
+    private File takePrefetched(int ci) {
+        synchronized (mPrefLock) {
+            if (mPref != null && mPrefIdx == ci) {
+                File f = mPref; mPref = null; mPrefIdx = -1; return f;
+            }
+            return null;
+        }
+    }
+
+    private void clearPrefetch() {
+        synchronized (mPrefLock) { mPref = null; mPrefIdx = -1; mPrefTarget = -1; }
+    }
+
+    /** 微软男/女声：经 OpenWrt 常开桥服务（edge-tts）合成，返回 mp3 文件或 null。
+     *  说明：Android 5 的 TLS 指纹被微软 Edge 服务拉黑（403），电视无法自己直连微软，
+     *  故改调局域网内 24h 常开的 OpenWrt 上的 edge-tts 桥接服务。 */
+    private File edgeSpeak(String text, String voice) {
+        if (text == null || text.isEmpty()) return null;
+        try {
+            String url = "http://192.168.1.22:8123/tts?voice="
+                    + java.net.URLEncoder.encode(voice, "UTF-8")
+                    + "&text=" + java.net.URLEncoder.encode(text, "UTF-8");
+            return download(url, "tts_e" + mTtsSeq.incrementAndGet() + ".mp3");
+        } catch (Throwable t) {
+            Log.w("edge http fail " + t);
+            return null;
+        }
+    }
+
+/** 生成 edge-tts date_to_string() 同款时间戳（UTC，固定 GMT+0000 字样）。 */
+    private static String dateToString() {
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
+                "EEE MMM dd yyyy HH:mm:ss 'GMT+0000 (Coordinated Universal Time)'", java.util.Locale.US);
+        f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        return f.format(new java.util.Date());
+    }
+
+    private static String sha256Hex(String s) throws Exception {
+        byte[] d = java.security.MessageDigest.getInstance("SHA-256").digest(s.getBytes("ASCII"));
+        StringBuilder sb = new StringBuilder();
+        for (byte b : d) sb.append(String.format("%02x", b & 0xFF));
+        return sb.toString();
+    }
+
+    private static void wsSend(java.io.OutputStream os, int opcode, byte[] payload) throws java.io.IOException {
+        byte[] mask = new byte[4];
+        new java.util.Random().nextBytes(mask);
+        int n = payload.length;
+        java.io.ByteArrayOutputStream h = new java.io.ByteArrayOutputStream();
+        h.write(0x80 | opcode);
+        if (n < 126) h.write(0x80 | n);
+        else if (n < 65536) { h.write(0x80 | 126); h.write((n >> 8) & 0xFF); h.write(n & 0xFF); }
+        else { h.write(0x80 | 127); for (int i = 7; i >= 0; i--) h.write((n >> (8 * i)) & 0xFF); }
+        h.write(mask);
+        byte[] body = new byte[n];
+        for (int i = 0; i < n; i++) body[i] = (byte) (payload[i] ^ mask[i % 4]);
+        os.write(h.toByteArray());
+        os.write(body);
+        os.flush();
+    }
+
+    /** 读一个 WebSocket 帧（服务端未掩码），返回 opcode 并写入 payload；-1=断开 */
+    private static int readFrame(java.io.InputStream is, java.io.OutputStream payloadOut) throws java.io.IOException {
+        int b0 = is.read();
+        if (b0 < 0) return -1;
+        int b1 = is.read();
+        if (b1 < 0) return -1;
+        int opcode = b0 & 0x0F;
+        int ln = b1 & 0x7F;
+        if (ln == 126) {
+            ln = (is.read() << 8) | is.read();
+        } else if (ln == 127) {
+            long l = 0;
+            for (int i = 0; i < 8; i++) l = (l << 8) | is.read();
+            ln = (int) l;
+        }
+        byte[] p = new byte[ln];
+        int off = 0;
+        while (off < ln) {
+            int r = is.read(p, off, ln - off);
+            if (r < 0) return -1;
+            off += r;
+        }
+        payloadOut.write(p, 0, ln);
+        return opcode;
+    }
+
+    private static int indexOfBytes(byte[] hay, byte[] needle) {
+        outer:
+        for (int i = 0; i + needle.length <= hay.length; i++) {
+            for (int j = 0; j < needle.length; j++) if (hay[i + j] != needle[j]) continue outer;
+            return i;
+        }
+        return -1;
     }
 
     /** 一段播完后：接着下一段，全部播完才进下一条 */
@@ -1566,8 +1776,13 @@ public class NewsFragment extends BaseFragment {
         try {
             mPlayer = new android.media.MediaPlayer();
             mPlayer.setDataSource(f.getAbsolutePath());
+            final long t0 = System.currentTimeMillis();
             mPlayer.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
-                @Override public void onCompletion(android.media.MediaPlayer mp) { onChunkDone(index); }
+                @Override public void onCompletion(android.media.MediaPlayer mp) {
+                    Log.w("done " + f.getName() + " after " + (System.currentTimeMillis() - t0) + "ms");
+                    try { f.delete(); } catch (Throwable ignored) { }   // 这段播完就删
+                    onChunkDone(index);
+                }
             });
             mPlayer.setOnErrorListener(new android.media.MediaPlayer.OnErrorListener() {
                 @Override public boolean onError(android.media.MediaPlayer mp, int w, int x) {
@@ -1577,6 +1792,7 @@ public class NewsFragment extends BaseFragment {
                 }
             });
             mPlayer.prepare();
+            Log.w("play " + f.getName() + " dur=" + mPlayer.getDuration() + "ms");
             mPlayer.start();
         } catch (Throwable t) {
             Log.w("play fail " + t);
@@ -1642,9 +1858,24 @@ public class NewsFragment extends BaseFragment {
     private void stopReading() {
         mReading = false;
         mReadIndex = -1;
+        clearPrefetch();
         releasePlayer();
+        cleanTtsFiles();
         status("");
         refreshRows();
+    }
+
+    /** 每段一个文件，播完/停下就删，避免缓存目录越积越大 */
+    private void cleanTtsFiles() {
+        try {
+            File dir = mCtx.getCacheDir();
+            File[] fs = dir.listFiles();
+            if (fs == null) return;
+            for (File f : fs) {
+                String n = f.getName();
+                if (n.startsWith("tts_") && n.endsWith(".mp3")) f.delete();
+            }
+        } catch (Throwable ignored) { }
     }
 
     private void releasePlayer() {
