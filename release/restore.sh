@@ -6,6 +6,9 @@
 #    adb push release/ /data/local/tmp/tvrestore
 #    adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh'
 #
+#  如果确实要用一份与 APK 不匹配的旧数据库（不推荐）：
+#    adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh --force'
+#
 #  目录要求：脚本同目录下需有
 #    news.apk  live.apk  douban.apk  radio.apk  stock.apk  launcher_new.db
 # ============================================================
@@ -14,12 +17,16 @@ case "$0" in */*) DIR=${0%/*} ;; *) DIR=. ;; esac
 L=/data/data/com.stv.launcher
 P=$L/files/plugins
 DB=$L/databases/launcher_new.db
+FORCE=0
+[ "$1" = "--force" ] && FORCE=1
 
 # 插件文件名（也是包名后缀）
 NAMES="news live douban radio stock"
 
 # 文件大小（字节），不依赖 awk（这台电视的 shell 只有 toolbox）
 fsize() { set -- $(ls -l "$1" 2>/dev/null); echo "$4"; }
+# MD5；电视上没有独立的 md5sum，只有 busybox 里的
+apkmd5() { busybox md5sum "$1" 2>/dev/null | { read m rest; echo "$m"; }; }
 
 echo "== 检查文件 =="
 for n in $NAMES; do
@@ -37,6 +44,34 @@ echo "  ok"
 if [ ! -d "$L" ]; then
     echo "找不到乐视桌面数据目录 $L，可能不是乐视电视，中止"
     exit 3
+fi
+
+echo "== 校验模板数据库与 APK =="
+if ! busybox md5sum "$DIR/launcher_new.db" >/dev/null 2>&1; then
+    echo "  提示  busybox 不可用，跳过 MD5/大小校验"
+else
+    BAD=0
+    for n in $NAMES; do
+        md5=$(apkmd5 "$DIR/$n.apk")
+        sz=$(fsize "$DIR/$n.apk")
+        if [ -z "$md5" ] || \
+           ! busybox grep -a -i -q "$md5" "$DIR/launcher_new.db" || \
+           ! busybox grep -a -q "$sz" "$DIR/launcher_new.db"; then
+            echo "  不一致  $n.apk  ${sz} bytes  ${md5:-无 MD5}"
+            BAD=1
+        else
+            echo "  ok  $n.apk  ${sz} bytes"
+        fi
+    done
+    if [ $BAD -eq 1 ]; then
+        if [ $FORCE -eq 1 ]; then
+            echo "  --force：忽略不一致，继续"
+        else
+            echo "  模板数据库与 APK 不匹配，桌面会继续用旧 dex。"
+            echo "  先在 PC 上执行 python release/check-db.py --fix，再重新 push。"
+            exit 6
+        fi
+    fi
 fi
 
 echo "== 备份原数据库 =="

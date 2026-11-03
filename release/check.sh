@@ -8,8 +8,9 @@
 #
 #  只读检查，不修改任何东西。用来判断：
 #    · 有没有 root
-#    · 桌面是否就位
+#    · 系统 / 桌面版本
 #    · SCREEN_INFO 表结构能不能用仓库里的数据库模板
+#    · 数据库模板里的 FILE_SIZE / MD5 是否和 release/*.apk 对得上
 # ============================================================
 
 case "$0" in */*) DIR=${0%/*} ;; *) DIR=. ;; esac
@@ -22,19 +23,31 @@ NAMES="news live douban radio stock"
 # 文件大小（字节），不依赖 awk（这台电视的 shell 只有 toolbox）
 fsize() { set -- $(ls -l "$1" 2>/dev/null); echo "$4"; }
 
+# MD5；电视上没有独立的 md5sum，只有 busybox 里的
+apkmd5() { busybox md5sum "$1" 2>/dev/null | { read m rest; echo "$m"; }; }
+
+HAVE_BB=0
+busybox md5sum "$0" >/dev/null 2>&1 && HAVE_BB=1
+
 echo "=================================================="
 echo " 乐视桌面五 TAB 恢复前体检"
 echo "=================================================="
 
 echo ""
-echo "[1/5] root 权限"
+echo "[1/7] root 权限"
 case "$(id)" in
     uid=0*) echo "  OK  已是 root" ;;
     *)      echo "  失败  当前不是 root，请先 su（电视上会弹 SuperSU，点授权）" ;;
 esac
 
 echo ""
-echo "[2/5] 桌面进程"
+echo "[2/7] 系统与桌面"
+echo "  固件    $(getprop ro.build.display.id)"
+echo "  Android $(getprop ro.build.version.release)  (SDK $(getprop ro.build.version.sdk))"
+VN=$(dumpsys package com.stv.launcher 2>/dev/null | busybox grep -m1 versionName)
+VC=$(dumpsys package com.stv.launcher 2>/dev/null | busybox grep -m1 versionCode)
+[ -n "$VN" ] && echo "  桌面    $VN"
+[ -n "$VC" ] && echo "          $VC"
 if [ -d "$L" ]; then
     echo "  OK  桌面数据目录存在 $L"
 else
@@ -49,7 +62,7 @@ else
 fi
 
 echo ""
-echo "[3/5] 现有插件"
+echo "[3/7] 现有插件"
 if [ -d "$P" ]; then
     for n in $NAMES; do
         if [ -f "$P/$n.apk" ]; then
@@ -63,7 +76,7 @@ else
 fi
 
 echo ""
-echo "[4/5] 数据库"
+echo "[4/7] 数据库"
 if [ -f "$DB" ]; then
     echo "  OK  现有数据库 $(fsize "$DB") bytes"
 else
@@ -77,7 +90,7 @@ else
 fi
 
 echo ""
-echo "[5/5] 检查模板完整性"
+echo "[5/7] 模板完整性"
 MISS=0
 for n in $NAMES; do
     if [ ! -f "$DIR/$n.apk" ]; then
@@ -92,11 +105,61 @@ else
     exit 2
 fi
 
+SCHEMA_BAD=0
+if [ $HAVE_BB -eq 0 ]; then
+    echo "  提示  busybox 不可用，跳过表结构检查"
+else
+    for k in SCREEN_INFO PLUGIN_PATH SCREEN_TAG FILE_SIZE MD5 POSITION OFFLINE_SHOT; do
+        if busybox grep -a -q "$k" "$TEMPLATE"; then
+            echo "  OK  表结构含 $k"
+        else
+            echo "  失败  表结构缺 $k"
+            SCHEMA_BAD=1
+        fi
+    done
+fi
+if [ $SCHEMA_BAD -eq 1 ]; then
+    echo "  模板与当前固件的 SCREEN_INFO 结构不一致，不要覆盖数据库，改走方式 B"
+    exit 4
+fi
+
+echo ""
+echo "[6/7] 模板数据库与 APK 是否一致"
+MISMATCH=0
+if [ $HAVE_BB -eq 0 ]; then
+    echo "  提示  busybox 不可用，跳过 MD5 校验"
+else
+    for n in $NAMES; do
+        apk="$DIR/$n.apk"
+        md5=$(apkmd5 "$apk")
+        sz=$(fsize "$apk")
+        bad=""
+        [ -n "$md5" ] || bad="$bad MD5算不出"
+        [ -n "$md5" ] && ! busybox grep -a -i -q "$md5" "$TEMPLATE" && bad="$bad MD5"
+        busybox grep -a -q "$sz" "$TEMPLATE" || bad="$bad 大小"
+        busybox grep -a -q "com.dsh.tvdesk.$n" "$TEMPLATE" || bad="$bad 包名"
+        if [ -z "$bad" ]; then
+            echo "  OK  $n.apk  $sz bytes  $md5"
+        else
+            echo "  不一致  $n.apk  缺:$bad"
+            MISMATCH=1
+        fi
+    done
+fi
+
 echo ""
 echo "=================================================="
 echo " 结论"
 echo "=================================================="
-echo " 可以先执行：sh $DIR/restore.sh"
+if [ $SCHEMA_BAD -eq 1 ]; then
+    echo " 表结构不一致，改走 docs/RESTORE.md 的『方式 B：手动登记』。"
+elif [ $MISMATCH -eq 1 ]; then
+    echo " 数据库模板和 APK 对不上，不要直接恢复。"
+    echo " 在 PC 上执行：python release/check-db.py --fix"
+    echo " 然后再把 release/ 推上来重跑 check.sh。"
+else
+    echo " 可以先执行：sh $DIR/restore.sh"
+fi
 echo ""
 echo " 注意：如果这次刷机换了新固件（不是原来的系统版本），"
 echo " 建议改用 docs/RESTORE.md 里的『方式 B：手动登记』，"

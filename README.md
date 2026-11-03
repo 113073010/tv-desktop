@@ -34,7 +34,7 @@
 
 ![直播](docs/images/live-main.jpg)
 
-- 读 `/sdcard/tvdesk/直播源.txt`（DIYP 格式，`#` 开头为分组）
+- 读 `/sdcard/DIYP影音/*.txt`（DIYP 格式，`#` 开头为分组；每个文件一组，按 央视 / 地方 / 数字 / 吉林 排序）
 - IJK 播放器 + 低延迟参数（`overlay-format=fcc-rv32`、大缓冲）
 - 台名自动清理（去掉「高清」「超高清」「现网」等后缀）
 - 预览画面 + 2×5 频道墙
@@ -44,7 +44,7 @@
 ![豆瓣荐片](docs/images/douban-main.jpg)
 
 - 热播电影 / 热播剧集 / 热播综艺 / 国产剧 / 美剧 / 韩剧 / 日剧 / 动画电影 / 国漫 / 日漫 / 纪录片 / 高分
-- 海报网格 + 详情，点播交给 TVBox
+- 海报网格 + 详情，点播交给 TVBox（需安装 `com.github.tvbox.osc.tk`）
 
 ### 电台
 
@@ -121,7 +121,27 @@
 
 最省事的方式是用 `release/` 里的 `launcher_new.db` 直接覆盖（已含 5 个插件的登记），再执行 `restore.sh`。
 
-详细安装教程放在[docs/RESTORE.md](https://github.com/113073010/tv-desktop/blob/main/docs/RESTORE.md)
+换过 APK 之后，先在 PC 上跑一次：
+
+```bash
+python release/check-db.py --fix
+```
+
+它会把 `SCREEN_INFO` 里的 `FILE_SIZE` / `MD5` / 版本号与新 APK 对齐；`restore.sh` 也会在覆盖前检查，不一致就拒绝执行（除非加 `--force`）。
+
+详细安装教程放在 [docs/RESTORE.md](docs/RESTORE.md)，真机实测记录放在 [docs/DEVICE.md](docs/DEVICE.md)。
+
+## 实测环境
+
+在 Letv X3-55 上验证：
+
+| 项 | 值 |
+|---|---|
+| 系统 | Android 5.0.1（SDK 21） |
+| 固件 | `V2301RCN02C060072B08221N` |
+| 桌面 | `com.stv.launcher` 1.0.2（versionCode 20170509） |
+| 屏幕 | 1920×1080 / density 240 |
+| 播放内核 | TVBox `com.github.tvbox.osc.tk` |
 
 ## 目录结构
 
@@ -131,8 +151,8 @@ plugin-live/     直播插件源码
 plugin-douban/   豆瓣荐片插件源码
 plugin-radio/    电台插件源码
 plugin-stock/    股票插件源码
-release/         签名后的 APK、数据库模板、部署脚本
-docs/            逆向笔记（插件机制、踩坑）
+release/         签名后的 APK、数据库模板、部署脚本、check-db.py
+docs/            逆向笔记（插件机制、踩坑、真机实测）
 ```
 
 ## 构建

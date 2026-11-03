@@ -68,6 +68,12 @@ for f in tvdesk.log tvdesk_stock.log tvdesk_douban.log \
         rm -f "/sdcard/$f" && echo "      已删 /sdcard/$f（${k} bytes）"
     fi
 done
+# 通配符必须用绝对路径，否则在 su -c 的当前目录下不会展开
+for f in /sdcard/tv_now*.png; do
+    [ -f "$f" ] || continue
+    k=$(fsize "$f")
+    rm -f "$f" && echo "      已删 $f（${k} bytes）"
+done
 for d in plugin_dev plugin backups; do
     if [ -d "/sdcard/$d" ]; then
         rm -rf "/sdcard/$d" && echo "      已删 /sdcard/$d/"
@@ -77,11 +83,10 @@ done
 # --- 4. 可选：数据库快照
 if [ $ALL -eq 1 ]; then
     echo "[4/4] 数据库快照"
-    for f in launcher_new.db launcher_new.before_restore.db \
-             launcher_backup_143638.db db_before_swap.db db_now.db; do
-        if [ -f "/sdcard/$f" ]; then
-            rm -f "/sdcard/$f" && echo "      已删 /sdcard/$f"
-        fi
+    for f in /sdcard/launcher_new.db /sdcard/launcher_new.before_restore.db \
+             /sdcard/launcher_backup_*.db /sdcard/db_before_swap.db /sdcard/db_now.db; do
+        [ -f "$f" ] || continue
+        rm -f "$f" && echo "      已删 $f"
     done
 else
     echo "[4/4] 数据库快照保留（加 --all 可删）"
