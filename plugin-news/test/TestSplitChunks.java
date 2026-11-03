@@ -74,6 +74,24 @@ public class TestSplitChunks {
         if (!ok) failed++;
         System.out.println((ok ? "ok   " : "FAIL ") + "短句不切  段数=" + cs.size());
 
+        // 音色表：8 个中文音色，名字唯一，前三条顺序不能变（老配置按旧下标存）
+        java.lang.reflect.Field vf = c.getDeclaredField("EDGE_VOICES");
+        vf.setAccessible(true);
+        String[][] vs = (String[][]) vf.get(null);
+        java.util.Set<String> keys = new java.util.HashSet<String>();
+        boolean vok = vs.length == 8;
+        for (String[] v : vs) {
+            if (v == null || v.length != 2 || !keys.add(v[0])) vok = false;
+        }
+        vok = vok
+                && "zh-CN-YunxiNeural".equals(vs[0][0])
+                && "zh-CN-YunjianNeural".equals(vs[1][0])
+                && "zh-CN-XiaoxiaoNeural".equals(vs[2][0])
+                && "zh-CN-liaoning-XiaobeiNeural".equals(vs[6][0])
+                && "zh-CN-shaanxi-XiaoniNeural".equals(vs[7][0]);
+        if (!vok) failed++;
+        System.out.println((vok ? "ok   " : "FAIL ") + "音色表 8 项且前三条顺序不变  实际=" + vs.length);
+
         System.out.println(failed == 0 ? "\n全部通过" : "\n失败 " + failed + " 项");
         if (failed != 0) System.exit(1);
     }

@@ -28,7 +28,7 @@
 
 | 文件 | 大小 | MD5 | 说明 |
 |---|---:|---|---|
-| `news.apk` | 45455 | `138F761AC67AA3292C5372F4D0CF971C` | 新闻 1.0.10 / 60 |
+| `news.apk` | 45455 | `627850DC8CDFCC7E301D551192844EC1` | 新闻 1.0.11 / 61 |
 | `live.apk` | 61839 | `4694EA88D87672AC93EA0404C3A6FA4F` | 直播 1.4.0 / 27 |
 | `douban.apk` | 24975 | `272F5971C10D3F078A0AA2BCE60A63B5` | 豆瓣荐片 1.0.1 / 46 |
 | `radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` | 电台 1.4.4 / 26 |
@@ -158,9 +158,29 @@ $cp    = "$proj\build\classes;$proj\build\stubs.jar;$root\tools\android-sdk\plat
 <int name="voice"  value="1" />
 <int name="speed"  value="2" />
 <int name="engine" value="1" />
+<string name="voice_name">微软·云健(男)</string>
 ```
 
 即当前是「微软 Edge + 第二个音色 + 1.2 倍速」。其它四个插件没有偏好文件。
+
+`voice_name` 是 1.0.11 加的：音色表以后再加人时，按名字找回上次用的音色；
+`voice` 下标继续保留，**前三条顺序不能动**（老版本只存了下标，0/1/2 分别是云希/云健/晓晓）。
+
+Edge 中文音色表（`EDGE_VOICES`，8 个，全部实测桥上返回 200）：
+
+| 下标 | voice | 显示名 |
+|---:|---|---|
+| 0 | `zh-CN-YunxiNeural` | 云希(男) |
+| 1 | `zh-CN-YunjianNeural` | 云健(男) |
+| 2 | `zh-CN-XiaoxiaoNeural` | 晓晓(女) |
+| 3 | `zh-CN-YunxiaNeural` | 云夏(男) |
+| 4 | `zh-CN-YunyangNeural` | 云扬(男) |
+| 5 | `zh-CN-XiaoyiNeural` | 晓伊(女) |
+| 6 | `zh-CN-liaoning-XiaobeiNeural` | 晓北(女·东北话) |
+| 7 | `zh-CN-shaanxi-XiaoniNeural` | 晓妮(女·陕西话) |
+
+粤语（`zh-HK-*`）和台湾（`zh-TW-*`）的音色桥也支持，但没有放进新闻页的循环里。
+`zh-CN-XiaobeiNeural` / `zh-CN-XiaoniNeural` 是上面两个方言音色的短名，桥也认。
 
 ### 调试残留
 

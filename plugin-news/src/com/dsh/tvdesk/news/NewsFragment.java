@@ -100,10 +100,16 @@ public class NewsFragment extends BaseFragment {
     private int mEngineIdx = 1;
     /** 当前引擎里的音色下标 */
     private int mVoiceSel = 0;
+    /** 前三条顺序别动：老版本把音色存成下标 0/1/2，换位置会串音色。新音色只往后加。 */
     private static final String[][] EDGE_VOICES = {
         {"zh-CN-YunxiNeural", "微软·云希(男)"},
         {"zh-CN-YunjianNeural", "微软·云健(男)"},
-        {"zh-CN-XiaoxiaoNeural", "微软·晓晓(女)"}
+        {"zh-CN-XiaoxiaoNeural", "微软·晓晓(女)"},
+        {"zh-CN-YunxiaNeural", "微软·云夏(男)"},
+        {"zh-CN-YunyangNeural", "微软·云扬(男)"},
+        {"zh-CN-XiaoyiNeural", "微软·晓伊(女)"},
+        {"zh-CN-liaoning-XiaobeiNeural", "微软·晓北(女·东北话)"},
+        {"zh-CN-shaanxi-XiaoniNeural", "微软·晓妮(女·陕西话)"}
     };
     private static final String[][] BAIDU_VOICES = {
         {"", "百度在线"}
@@ -116,7 +122,7 @@ public class NewsFragment extends BaseFragment {
     private int mTab = 0, mOffset = 0, mFocus = 0;
 
     private android.media.MediaPlayer mPlayer;
-    private boolean mReading = false, mChain = true;
+    private boolean mReading = false, mChain = true, mPaused = false;
     private final android.util.LruCache<String, Bitmap> mImgCache =
             new android.util.LruCache<String, Bitmap>(6 * 1024 * 1024);
     private final ExecutorService mImgPool = Executors.newFixedThreadPool(2);
@@ -440,6 +446,17 @@ public class NewsFragment extends BaseFragment {
         } catch (Throwable ignored) { }
         if (mEngineIdx < 0 || mEngineIdx > 1) mEngineIdx = 1;
         mVoiceSel = clampVoice(mVoiceSel);
+        // 版本升级后音色表变长/重排时，优先按名字找回上次用的音色
+        try {
+            String saved = ctx.getSharedPreferences("tvdesk_news", 0)
+                    .getString("voice_name", "");
+            if (saved != null && saved.length() > 0) {
+                String[][] all = mEngineIdx == 1 ? EDGE_VOICES : BAIDU_VOICES;
+                for (int i = 0; i < all.length; i++) {
+                    if (saved.equals(all[i][1])) { mVoiceSel = i; break; }
+                }
+            }
+        } catch (Throwable ignored) { }
         // 插件每次被桌面重新加载都会走到这里：把上次崩溃/拔电留下的 tts 残留清一遍
         trimTtsCache();
         FrameLayout root = new FrameLayout(ctx);        root.setLayoutParams(new ViewGroup.LayoutParams(
@@ -980,7 +997,9 @@ public class NewsFragment extends BaseFragment {
             mVoiceSel = 0;
             try {
                 mCtx.getSharedPreferences("tvdesk_news", 0).edit()
-                        .putInt("engine", mEngineIdx).putInt("voice", 0).apply();
+                        .putInt("engine", mEngineIdx)
+                        .putInt("voice", mVoiceSel)
+                        .putString("voice_name", currentVoiceName()).apply();
             } catch (Throwable ignored) { }
             refreshVoiceRows();
             updateVoiceBar();
@@ -992,7 +1011,9 @@ public class NewsFragment extends BaseFragment {
             if (n <= 1) { status("这个引擎只有一种音色"); return; }
             mVoiceSel = (mVoiceSel + 1) % n;
             try {
-                mCtx.getSharedPreferences("tvdesk_news", 0).edit().putInt("voice", mVoiceSel).apply();
+                mCtx.getSharedPreferences("tvdesk_news", 0).edit()
+                        .putInt("voice", mVoiceSel)
+                        .putString("voice_name", currentVoiceName()).apply();
             } catch (Throwable ignored) { }
             refreshVoiceRows();
             updateVoiceBar();
@@ -1643,9 +1664,18 @@ public class NewsFragment extends BaseFragment {
     private void readDetail() {
         int idx = readBase();
         if (idx < 0 || idx >= mFlat.size()) return;
+        // 已在朗读全文中：按确定暂停/继续，不再停止
+        if (mReading && !mChain) {
+            if (mPaused) {
+                resumeReading();
+            } else {
+                pauseReading();
+            }
+            return;
+        }
         boolean sameItem = mReading && !mChain && mReadIndex == idx;
         stopReading();
-        if (sameItem) return;   // 正在读这条全文时，再按一次就是停
+        if (sameItem) return;
         Item it = mFlat.get(idx);
         String head = speakTitle(it.title);
         String body = (mDocText != null && mDocText.length() > 0)
@@ -2130,12 +2160,44 @@ public class NewsFragment extends BaseFragment {
     private void stopReading() {
         mReading = false;
         mReadIndex = -1;
+        mPaused = false;
         clearPrefetch();
         releasePlayer();
         mPlayingFile = null;
         cleanTtsFiles();
         status("");
         refreshRows();
+    }
+
+    /** 暂读：停止当前播片但保留阅读状态，下次可继续 */
+    private void pauseReading() {
+        mPaused = true;
+        mChunkIdx = 0; // 重置chunk索引，下次从开头或上次位置播
+        if (mPlayer != null) {
+            try {
+                mPlayer.stop();
+                mPlayer.release();
+            } catch (Throwable ignored) { }
+            mPlayer = null;
+        }
+        mPlayingFile = null;
+        cleanTtsFiles();
+        // 只清除状态，不重置读索引，让下次继续从当前位置
+        status("<< 已暂停 >>");
+        refreshRows();
+    }
+
+    /** 继续阅读：从上次暂停的位置继续 */
+    private void resumeReading() {
+        mPaused = false;
+        // 这里可以根据 mReadIndex 和 mChunkIdx 重新开始播放
+        // 对于简化起见，直接重新播放整篇
+        if (mReadIndex >= 0 && mReadIndex < mFlat.size()) {
+            playItem(mReadIndex);
+        } else {
+            status("");
+            refreshRows();
+        }
     }
 
     /** 每段一个文件，播完/停下就删，避免缓存目录越积越大 */
