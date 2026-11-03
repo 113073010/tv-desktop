@@ -122,10 +122,30 @@ public class QuoteApi {
         it.pct = num(f, 32);
         it.high = num(f, 33);
         it.low = num(f, 34);
-        if (f.length > 30) it.time = f[30];
+        if (f.length > 30) {
+            it.time = f[30];
+            // 腾讯美股给的是美东时间，统一换成北京时间，别和其它市场混着显示
+            if (code.startsWith("us") && it.time.length() >= 19) {
+                it.time = etToBeijing(it.time);
+            }
+        }
         it.volTxt = fmtVol(num(f, 36));
         it.amtTxt = fmtAmt(num(f, 37));
         out.add(it);
+    }
+
+    /** 美东时间字符串（yyyy-MM-dd HH:mm:ss）→ 北京时间，自动处理夏令时 */
+    private static String etToBeijing(String raw) {
+        try {
+            java.text.SimpleDateFormat in = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US);
+            in.setTimeZone(java.util.TimeZone.getTimeZone("America/New_York"));
+            java.util.Date d = in.parse(raw.trim());
+            java.text.SimpleDateFormat out = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US);
+            out.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
+            return out.format(d);
+        } catch (Throwable t) {
+            return raw;
+        }
     }
 
     private static float num(String[] f, int i) {
