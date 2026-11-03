@@ -28,7 +28,7 @@
 
 | 文件 | 大小 | MD5 | 说明 |
 |---|---:|---|---|
-| `news.apk` | 45455 | `627850DC8CDFCC7E301D551192844EC1` | 新闻 1.0.11 / 61 |
+| `news.apk` | 49551 | `CAA9ED234F02AC7279040BDD03783C8E` | 新闻 1.0.15 / 65 |
 | `live.apk` | 61839 | `4694EA88D87672AC93EA0404C3A6FA4F` | 直播 1.4.0 / 27 |
 | `douban.apk` | 24975 | `272F5971C10D3F078A0AA2BCE60A63B5` | 豆瓣荐片 1.0.1 / 46 |
 | `radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` | 电台 1.4.4 / 26 |
@@ -120,6 +120,33 @@ $cp    = "$proj\build\classes;$proj\build\stubs.jar;$root\tools\android-sdk\plat
     -cp $cp -d "$root\tmp\chunktest" "$proj\test\TestSplitChunks.java"
 & "$root\tools\jdk\jdk-17.0.20.1+1\bin\java.exe" -cp "$root\tmp\chunktest;$cp" TestSplitChunks
 ```
+
+---
+
+## 全文播完自动接下一条（1.0.15）
+
+以前右栏按「确定」朗读全文，读完就 `stopReading()` 停住；想听下一条得再挪过去按一次。
+现在改成「听完一条，停 3 秒没人动，就自动播下一条全文」：
+
+- 一条播完 → 状态栏倒计时：`♪ 本条已播完，3 秒后自动播放下一条全文（按任意键取消）`
+- 3 秒内没有任何按键 → 自动切下一条：列表的 `♪` 标记和右栏一起过去，正文用抓来的全文（不是 RSS 摘要），到手就开读
+- 倒计时里按任意键 → 取消并停止；键本身照常生效（方向键照走、返回照退，确定会重读当前这条）
+- 正文还在抓的时候（`♪ 正在读取下一条全文…`）按键同样算放弃
+- 播到本分类最后一条 → 停止，状态栏提示 `已播完本分类全部新闻`，不会跨分类跳
+- 暂停/继续（确定）仍然可用；暂停中不会起倒计时
+
+实现上的几个点（改这块时别踩）：
+
+- **「任意键」只能靠根容器**：`RootFrame extends FrameLayout` 重写 `dispatchKeyEvent()`，
+  在子 View 之前看到按键。`rowKeys` / `sideKeys` 会把方向键和返回键吃掉，
+  只挂 `setOnKeyListener` 是收不齐的；按住不放的重复键用 `getRepeatCount()==0` 过滤。
+- `onSpeakFinished()` 按 `mChain` 分流：标题轮播还是老的「直接下一条标题」，全文才走 `scheduleAutoNext()`。
+- `loadFullText()` 多了一个 `Runnable onReady` 重载：缓存命中、抓到全文、抓不到（回退摘要）都会在主线程回调，
+  自动续播挂在它上面，避免「先读摘要再补全文」读两遍。
+- `mStartingArticle` 标记「正在给下一条抓正文」，这期间按确定不会被 `readDetail()` 当成暂停/继续。
+- 上一条开读时顺手 `prefetchBody(index + 1)`，把下一条正文提前抓进 `mFullCache`，3 秒倒计时基本够用。
+- `rowKeys` 里的 slot 改成「真正拿到焦点的那一行」，不再用 `mFocus - mOffset`：
+  自动续播会把 `mFocus` 挪到下一条，遥控器焦点可能还停在旧行，按旧算法会一次跳两行。
 
 ---
 

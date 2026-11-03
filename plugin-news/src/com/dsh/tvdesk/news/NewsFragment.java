@@ -93,8 +93,9 @@ public class NewsFragment extends BaseFragment {
     private android.webkit.WebView mWeb;
     private String mWebUrl;
     private String mDocText = "";
+    // 正文/文档缓存在工作线程写、主线程读，用同步包装避免 HashMap 并发写坏
     private final java.util.Map<String, java.util.List<Block>> mDocCache =
-            new java.util.HashMap<String, java.util.List<Block>>();
+            java.util.Collections.synchronizedMap(new java.util.HashMap<String, java.util.List<Block>>());
     private FrameLayout mVoicePanel;
     /** 引擎：0=百度在线，1=微软 edge（经 OpenWrt 桥） */
     private int mEngineIdx = 1;
@@ -123,12 +124,20 @@ public class NewsFragment extends BaseFragment {
     private android.media.MediaPlayer mPlayer;
     private boolean mReading = false, mChain = true;
     private boolean mPaused = false;   // 全文朗读暂停标志（按确定切换）
+    /** 全文读完后的自动续播：等 N 秒没按键就播下一条全文 */
+    private static final int AUTO_NEXT_SECONDS = 3;
+    private boolean mAutoNextOn = false;
+    private int mAutoNextSec = 0;
+    private Runnable mAutoNextTick;
+    /** 正在为下一条抓全文（mChunks 还是上一条的，此时按键别当成暂停/继续） */
+    private boolean mStartingArticle = false;
     private final android.util.LruCache<String, Bitmap> mImgCache =
             new android.util.LruCache<String, Bitmap>(6 * 1024 * 1024);
     private final ExecutorService mImgPool = Executors.newFixedThreadPool(2);
     private final java.util.Map<String, java.util.List<String>> mArticleImgs =
             new java.util.HashMap<String, java.util.List<String>>();
-    private final java.util.Map<String, String> mFullCache = new java.util.HashMap<String, String>();
+    private final java.util.Map<String, String> mFullCache =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<String, String>());
     private java.util.List<String> mChunks = new ArrayList<String>();
     private int mChunkIdx = 0;
     private final Object mPrefLock = new Object();
@@ -506,7 +515,11 @@ public class NewsFragment extends BaseFragment {
         mVoiceSel = clampVoice(mVoiceSel);
         // 插件每次被桌面重新加载都会走到这里：把上次崩溃/拔电留下的 tts 残留清一遍
         trimTtsCache();
-        FrameLayout root = new FrameLayout(ctx);        root.setLayoutParams(new ViewGroup.LayoutParams(
+        RootFrame root = new RootFrame(ctx);
+        root.setKeyWatcher(new RootFrame.KeyWatcher() {
+            @Override public void onKeyDown(int code) { onAnyKey(); }
+        });
+        root.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.setPadding(dp(26), dp(100), dp(26), dp(10));
         root.setClipChildren(false);
@@ -1149,7 +1162,10 @@ public class NewsFragment extends BaseFragment {
         }
     }
 
-    private void updateSide() {
+    private void updateSide() { updateSide(true); }
+
+    /** loadBody=false：正文由调用方自己抓（自动续播时要等全文到手再开读） */
+    private void updateSide(boolean loadBody) {
         if (mFlat.isEmpty()) {
             mHeadTitle.setText("没有新闻");
             mHeadDesc.setText("");
@@ -1175,24 +1191,33 @@ public class NewsFragment extends BaseFragment {
         }
         mHeadMeta.setText(cur.source + (cur.time == null || cur.time.isEmpty() ? "" : " · " + cur.time));
         if (mDetailScroll != null) mDetailScroll.scrollTo(0, 0);
-        loadFullText(cur, i);
+        if (loadBody) loadFullText(cur, i);
     }
 
-    /** 抓正文：先显示摘要，拿到全文后替换 */
-    private void loadFullText(final Item it, final int index) {
-        if (it == null || it.link == null || !it.link.startsWith("http")) return;
+    private void loadFullText(final Item it, final int index) { loadFullText(it, index, null); }
+
+    /** 抓正文：先显示摘要，拿到全文后替换；onReady 在主线程回调（拿到全文、缓存命中、或确认拿不到） */
+    private void loadFullText(final Item it, final int index, final Runnable onReady) {
+        if (it == null || it.link == null || !it.link.startsWith("http")) {
+            if (onReady != null) onReady.run();
+            return;
+        }
         String cached = mFullCache.get(it.link);
         if (cached != null) {
             if (mHeadDesc != null && index == readBase()) {
                 mHeadDesc.setText(cached);
                 if (mDetailScroll != null) mDetailScroll.scrollTo(0, 0);
             }
+            if (onReady != null) onReady.run();
             return;
         }
         mPool.execute(new Runnable() {
             @Override public void run() {
                 final String full = fetchBody(it.link);
-                if (full == null || full.length() < 200) return;
+                if (full == null || full.length() < 200) {
+                    if (onReady != null) mMain.post(onReady);
+                    return;
+                }
                 mFullCache.put(it.link, full);
                 mMain.post(new Runnable() {
                     @Override public void run() {
@@ -1206,6 +1231,7 @@ public class NewsFragment extends BaseFragment {
                             }
                             if (mDetailScroll != null) mDetailScroll.scrollTo(0, 0);
                         }
+                        if (onReady != null) onReady.run();
                     }
                 });
             }
@@ -1550,7 +1576,13 @@ public class NewsFragment extends BaseFragment {
             if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
             int size = mFlat.size();
             if (size == 0) return false;
-            int slot = mFocus - mOffset;
+            // 以真正拿到焦点的行为准：自动续播会把 mFocus 挪到下一条，
+            // 但遥控器焦点可能还停在旧行上，按 mFocus 算会跳两行
+            int slot = -1;
+            for (int i = 0; i < ROWS; i++) {
+                if (mRows[i] == v) { slot = i; break; }
+            }
+            if (slot < 0) slot = mFocus - mOffset;
             if (slot < 0 || slot >= ROWS) slot = 0;
             switch (code) {
                 case KeyEvent.KEYCODE_DPAD_DOWN:
@@ -1698,6 +1730,7 @@ public class NewsFragment extends BaseFragment {
     /** 收集引擎的中文音色（装了引擎后可用它切男声/女声） */
 
     private void toggleRead(int index) {
+        cancelAutoNext();
         if (mReading) { stopReading(); return; }
         mReading = true;
         playItem(index);
@@ -1728,6 +1761,7 @@ public class NewsFragment extends BaseFragment {
 
     /** 详情卡按确定：停止轮播，朗读右栏显示的详细内容；正在读这条全文时按确定=暂停/继续 */
     private void readDetail() {
+        if (mStartingArticle) return;   // 正在给自动续播抓全文，别把它当成暂停/继续
         int idx = readBase();
         if (idx < 0 || idx >= mFlat.size()) return;
         boolean sameItem = mReading && !mChain && mReadIndex == idx;
@@ -1737,22 +1771,9 @@ public class NewsFragment extends BaseFragment {
         }
         stopReading();
         Item it = mFlat.get(idx);
-        String head = speakTitle(it.title);
         String body = (mDocText != null && mDocText.length() > 0)
                 ? mDocText : (mHeadDesc == null ? "" : mHeadDesc.getText().toString().trim());
-        String text;
-        if (body.length() == 0) {
-            text = head;
-        } else if (body.startsWith(head)) {
-            text = body;
-        } else {
-            text = head + "。" + body;
-        }
-        mReading = true;
-        mReadIndex = idx;
-        mChain = false;
-        status("♪ 正在朗读全文");
-        speak(text, idx);
+        startReading(idx, it, body);
     }
 
     private void readFullAt(int index) {
@@ -1805,6 +1826,7 @@ public class NewsFragment extends BaseFragment {
     }
 
     private void playItem(int index) {
+        cancelAutoNext();
         if (index < 0 || index >= mFlat.size()) { stopReading(); return; }
         mPaused = false;
         mReadIndex = index;
@@ -2083,10 +2105,128 @@ public class NewsFragment extends BaseFragment {
 
     private void onSpeakFinished(int index) {
         if (!mReading) return;
-        if (!mChain) { stopReading(); return; }
-        int next = index + 1;
-        if (next < mFlat.size()) playItem(next);
-        else stopReading();
+        if (mChain) {   // 标题轮播：直接下一条标题
+            int next = index + 1;
+            if (next < mFlat.size()) playItem(next);
+            else stopReading();
+            return;
+        }
+        // 全文读完：3 秒内没有按键就自动播下一条全文
+        scheduleAutoNext(index);
+    }
+
+    /** 全文读完 -> 开始倒计时；期间状态栏显示剩余秒数，任意键取消 */
+    private void scheduleAutoNext(final int index) {
+        cancelAutoNext();
+        if (!mReading) return;
+        if (index + 1 >= mFlat.size()) {
+            stopReading();
+            status("已播完本分类全部新闻");
+            return;
+        }
+        mAutoNextOn = true;
+        mAutoNextSec = AUTO_NEXT_SECONDS;
+        updateAutoNextStatus();
+        mAutoNextTick = new Runnable() {
+            @Override public void run() {
+                if (!mAutoNextOn) return;
+                mAutoNextSec--;
+                if (mAutoNextSec > 0) {
+                    updateAutoNextStatus();
+                    mMain.postDelayed(this, 1000);
+                } else {
+                    mAutoNextOn = false;
+                    mAutoNextTick = null;
+                    startNextFull(index + 1);
+                }
+            }
+        };
+        mMain.postDelayed(mAutoNextTick, 1000);
+    }
+
+    private void updateAutoNextStatus() {
+        status("♪ 本条已播完，" + mAutoNextSec + " 秒后自动播放下一条全文（按任意键取消）");
+    }
+
+    private void cancelAutoNext() {
+        mAutoNextOn = false;
+        if (mAutoNextTick != null) {
+            mMain.removeCallbacks(mAutoNextTick);
+            mAutoNextTick = null;
+        }
+    }
+
+    /** 倒计时到了：切到下一条，等正文到手再开读 */
+    private void startNextFull(final int index) {
+        if (!mReading || index < 0 || index >= mFlat.size()) { stopReading(); return; }
+        mPaused = false;
+        mStartingArticle = true;
+        mReadIndex = index;
+        mFocus = index;
+        if (index < mOffset || index >= mOffset + ROWS) {
+            mOffset = Math.max(0, Math.min(index, Math.max(0, mFlat.size() - ROWS)));
+        }
+        refreshRows();   // 先把列表里的 ♪ 挪到下一条
+        final Item it = mFlat.get(index);
+        updateSide(false);   // 列表/右栏先切过去，正文由下面这个回调负责
+        status("♪ 正在读取下一条全文…");
+        loadFullText(it, index, new Runnable() {
+            @Override public void run() {
+                if (!mReading || mReadIndex != index) return;
+                mStartingArticle = false;
+                String body = mFullCache.get(it.link);
+                if (body == null || body.length() == 0) {
+                    body = trimArticleTail(it.desc == null ? "" : it.desc);
+                }
+                startReading(index, it, body);
+            }
+        });
+    }
+
+    /** 真正开读一条全文：标题 + 正文，并让后续自动续播有料可接 */
+    private void startReading(int index, Item it, String body) {
+        mReading = true;
+        mPaused = false;
+        mReadIndex = index;
+        mChain = false;
+        String head = speakTitle(it.title);
+        String text;
+        if (body == null || body.length() == 0) text = head;
+        else if (body.startsWith(head)) text = body;
+        else text = head + "。" + body;
+        status("♪ 正在朗读 " + (index + 1) + "/" + mFlat.size());
+        speak(text, index);
+        prefetchBody(index + 1);   // 把下一条正文先抓好，3 秒倒计时够用
+    }
+
+    /** 后台预抓下一条正文进 mFullCache（只为缩短下一条的等待，失败无所谓） */
+    private void prefetchBody(final int index) {
+        if (index < 0 || index >= mFlat.size()) return;
+        final Item it = mFlat.get(index);
+        if (it == null || it.link == null || !it.link.startsWith("http")) return;
+        if (mFullCache.get(it.link) != null) return;
+        mPool.execute(new Runnable() {
+            @Override public void run() {
+                if (mFullCache.get(it.link) != null) return;
+                final String full = fetchBody(it.link);
+                if (full == null || full.length() < 200) return;
+                mMain.post(new Runnable() {
+                    @Override public void run() {
+                        if (mFullCache.get(it.link) == null) mFullCache.put(it.link, full);
+                    }
+                });
+            }
+        });
+    }
+
+    /** 自动续播倒计时中按了任意键：取消倒计时并停止（键本身照常处理） */
+    private void onAnyKey() {
+        if (mAutoNextOn) {
+            cancelAutoNext();
+            stopReading();
+        } else if (mStartingArticle) {
+            stopReading();   // 正在抓下一条正文时按键 = 放弃这次自动续播
+        }
     }
 
     private void playFile(final File f, final int index) {
@@ -2177,6 +2317,8 @@ public class NewsFragment extends BaseFragment {
     }
 
     private void stopReading() {
+        cancelAutoNext();
+        mStartingArticle = false;
         mReading = false;
         mPaused = false;
         mReadIndex = -1;
@@ -2255,6 +2397,24 @@ public class NewsFragment extends BaseFragment {
             }
         } catch (Throwable ignored) { }
         mPlayer = null;
+    }
+
+    /**
+     * 插件页面的根容器：按键先从这里过一遍，
+     * 用来实现「自动续播倒计时中按任意键取消」——子 View 各自吃掉的键也能看见。
+     */
+    static class RootFrame extends FrameLayout {
+        interface KeyWatcher { void onKeyDown(int code); }
+        private KeyWatcher mWatcher;
+        RootFrame(Context c) { super(c); }
+        void setKeyWatcher(KeyWatcher w) { mWatcher = w; }
+        @Override public boolean dispatchKeyEvent(KeyEvent e) {
+            if (mWatcher != null && e.getAction() == KeyEvent.ACTION_DOWN
+                    && e.getRepeatCount() == 0) {
+                mWatcher.onKeyDown(e.getKeyCode());
+            }
+            return super.dispatchKeyEvent(e);
+        }
     }
 
     static class Log {
