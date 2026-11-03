@@ -1,6 +1,10 @@
-$ErrorActionPreference = 'Continue'
-$root   = 'D:\Deepseek\tv-desktop'
-$proj   = "$root\plugin-radio"
+﻿$ErrorActionPreference = 'Continue'
+# 以脚本所在目录为工程目录：在仓库里直接跑，不用管仓库被放在哪个盘
+$proj   = $PSScriptRoot
+# tools/ijk 在 tv-desktop 下（仓库的上一级），往上找到为止
+$root   = Split-Path $proj -Parent
+while ($root -and -not (Test-Path "$root\tools\android-sdk")) { $root = Split-Path $root -Parent }
+if (-not $root) { throw "找不到 tools\android-sdk，请把仓库放回 tv-desktop 下" }
 $sdk    = "$root\tools\android-sdk"
 $bt     = "$sdk\build-tools\34.0.0"
 $jdk    = "$root\tools\jdk\jdk-17.0.20.1+1"
