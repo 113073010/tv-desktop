@@ -118,7 +118,7 @@
 
 最省事的方式是用 `release/` 里的 `launcher_new.db` 直接覆盖（已含 5 个插件的登记），再执行 `restore.sh`。
 
-详细安装教程放在docs/RESTORE.md
+详细安装教程放在[docs/RESTORE.md](https://github.com/113073010/tv-desktop/blob/main/docs/RESTORE.md)
 
 ## 目录结构
 
