@@ -103,7 +103,12 @@ public class NewsFragment extends BaseFragment {
     private static final String[][] EDGE_VOICES = {
         {"zh-CN-YunxiNeural", "微软·云希(男)"},
         {"zh-CN-YunjianNeural", "微软·云健(男)"},
-        {"zh-CN-XiaoxiaoNeural", "微软·晓晓(女)"}
+        {"zh-CN-XiaoxiaoNeural", "微软·晓晓(女)"},
+        {"zh-CN-YunxiaNeural", "微软·云夏(男)"},
+        {"zh-CN-YunyangNeural", "微软·云扬(男)"},
+        {"zh-CN-XiaoyiNeural", "微软·晓伊(女)"},
+        {"zh-CN-liaoning-XiaobeiNeural", "微软·晓北(女·东北话)"},
+        {"zh-CN-shaanxi-XiaoniNeural", "微软·晓妮(女·陕西话)"}
     };
     private static final String[][] BAIDU_VOICES = {
         {"", "百度在线"}
