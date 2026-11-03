@@ -1989,9 +1989,10 @@ public class NewsFragment extends BaseFragment {
         }
     }
 
-    /** edge-tts 桥接服务根地址：局域网内 24h 常开的 OpenWrt。
-     *  部署到你自己的网络时，把下面地址改成 OpenWrt 的实际 IP（端口默认 8123）。 */
-    private static final String TTS_BRIDGE_URL = "http://192.168.1.10:8123";
+    /** edge-tts 桥接服务根地址：局域网内 24h 常开的 iStoreOS 网关。
+     *  注意：电视自己是 DHCP（IP 会变），所以只能填网关地址，不能填电视地址。
+     *  2026-11-03 起这台网关固定 192.168.1.22，端口 8123；换网络时只改这一行。 */
+    private static final String TTS_BRIDGE_URL = "http://192.168.1.22:8123";
 
     /** 微软男/女声：经 OpenWrt 常开桥服务（edge-tts）合成，返回 mp3 文件或 null。
      *  说明：Android 5 的 TLS 指纹被微软 Edge 服务拉黑（403），电视无法自己直连微软，

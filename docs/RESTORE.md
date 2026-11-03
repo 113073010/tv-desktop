@@ -138,7 +138,7 @@ INSERT INTO SCREEN_INFO (
 
 | 插件 | 包名 | versionName | versionCode | APK | 大小 | MD5 |
 |---|---|---|---|---|---|---|
-| 新闻 | `com.dsh.tvdesk.news` | 1.0.15 | 65 | `release/news.apk` | 49551 | `CAA9ED234F02AC7279040BDD03783C8E` |
+| 新闻 | `com.dsh.tvdesk.news` | 1.0.16 | 66 | `release/news.apk` | 49551 | `F94B9FD103E54BEF38944EC94B2B7F19` |
 | 直播 | `com.dsh.tvdesk.live` | 1.4.0 | 27 | `release/live.apk` | 61839 | `4694EA88D87672AC93EA0404C3A6FA4F` |
 | 豆瓣荐片 | `com.dsh.tvdesk.douban` | 1.0.1 | 46 | `release/douban.apk` | 24975 | `272F5971C10D3F078A0AA2BCE60A63B5` |
 | 电台 | `com.dsh.tvdesk.radio` | 1.4.4 | 26 | `release/radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` |
