@@ -126,11 +126,13 @@ public class NewsFragment extends BaseFragment {
     private java.util.List<String> mChunks = new ArrayList<String>();
     private int mChunkIdx = 0;
     private final Object mPrefLock = new Object();
-    private File mPref = null;      // 预取好的下一块 mp3
-    private int mPrefIdx = -1;      // mPref 对应的块号
-    private int mPrefItem = -1;     // mPref 对应的新闻下标（跨条预取用）
-    private int mPrefTarget = -1;   // 正在后台合成的目标块号
-    private int mPrefTargetItem = -1;
+    /** 预取缓存：key = 条号:块号 → 已合成好的 mp3 */
+    private final java.util.LinkedHashMap<String, File> mPrefMap =
+            new java.util.LinkedHashMap<String, File>();
+    /** 正在后台合成的 key，避免同一条重复合成 */
+    private final java.util.HashSet<String> mPrefBusy = new java.util.HashSet<String>();
+    /** 代次：清空后迟到的合成结果直接丢弃 */
+    private int mPrefGen = 0;
     private int mReadIndex = -1;
     private int mSpeedIdx = 1;
     /** 每次合成一个独立的 mp3 文件名：预取下一段时不会覆盖正在播放的那一段 */
@@ -1627,6 +1629,10 @@ public class NewsFragment extends BaseFragment {
         mChain = true;
         status("♪ 正在播报 " + (index + 1) + "/" + mFlat.size());
         speak(speakTitle(it.title), index);
+        // 本条刚开始就把后面几条的标题都合成好，轮播切条不空档
+        for (int k = 1; k <= 3 && index + k < mFlat.size(); k++) {
+            prefetchChunk(index + k, 0, speakTitle(mFlat.get(index + k).title));
+        }
     }
 
     private void speak(final String text, final int index) {
@@ -1715,19 +1721,32 @@ public class NewsFragment extends BaseFragment {
         }
     }
 
-    /** 后台预取 (item, ci) 这一块（仅当其仍是目标块时才写入缓存） */
+    private static String prefKey(int item, int ci) {
+        return item + ":" + ci;
+    }
+
+    /** 后台预取 (item, ci) 这一块；同一块不重复合成，结果按代次丢弃 */
     private void prefetchChunk(final int item, final int ci, final String part) {
+        final String key = prefKey(item, ci);
         final String kind = currentKind();
+        final int gen;
         synchronized (mPrefLock) {
-            mPrefTargetItem = item;
-            mPrefTarget = ci;
+            if (mPrefMap.containsKey(key) || mPrefBusy.contains(key)) return;
+            mPrefBusy.add(key);
+            gen = mPrefGen;
         }
         new Thread(new Runnable() {
             @Override public void run() {
                 final File f = synthChunk(kind, part);
                 synchronized (mPrefLock) {
-                    if (mPrefTargetItem == item && mPrefTarget == ci) {
-                        mPref = f; mPrefIdx = ci; mPrefItem = item;
+                    mPrefBusy.remove(key);
+                    if (gen == mPrefGen && f != null) {
+                        while (mPrefMap.size() >= 12) {          // 只留最近几块
+                            String old = mPrefMap.keySet().iterator().next();
+                            File of = mPrefMap.remove(old);
+                            try { if (of != null) of.delete(); } catch (Throwable ignored) { }
+                        }
+                        mPrefMap.put(key, f);
                     }
                 }
             }
@@ -1737,17 +1756,18 @@ public class NewsFragment extends BaseFragment {
     /** 取走已预取的 (item, ci) 块；没有则返回 null */
     private File takePrefetched(int item, int ci) {
         synchronized (mPrefLock) {
-            if (mPref != null && mPrefIdx == ci && mPrefItem == item) {
-                File f = mPref; mPref = null; mPrefIdx = -1; mPrefItem = -1; return f;
-            }
-            return null;
+            return mPrefMap.remove(prefKey(item, ci));
         }
     }
 
     private void clearPrefetch() {
         synchronized (mPrefLock) {
-            mPref = null; mPrefIdx = -1; mPrefItem = -1;
-            mPrefTarget = -1; mPrefTargetItem = -1;
+            mPrefGen++;
+            for (File f : mPrefMap.values()) {
+                try { if (f != null) f.delete(); } catch (Throwable ignored) { }
+            }
+            mPrefMap.clear();
+            mPrefBusy.clear();
         }
     }
 
