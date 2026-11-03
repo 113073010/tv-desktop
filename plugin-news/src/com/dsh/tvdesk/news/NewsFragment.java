@@ -138,6 +138,10 @@ public class NewsFragment extends BaseFragment {
     /** 每次合成一个独立的 mp3 文件名：预取下一段时不会覆盖正在播放的那一段 */
     private static final java.util.concurrent.atomic.AtomicInteger mTtsSeq =
             new java.util.concurrent.atomic.AtomicInteger();
+    /** TTS 缓存目录上限：超过就滚动删最旧的（电视存储小，兜底用） */
+    private static final long TTS_CACHE_MAX = 8L * 1024 * 1024;
+    /** 正在播的文件，滚动清理时跳过 */
+    private volatile File mPlayingFile = null;
     // TTS 相关已移除，仅保留百度在线合成
     private int mVoiceIdx = 0;
 
@@ -207,7 +211,7 @@ public class NewsFragment extends BaseFragment {
             String rawDesc = clean(pick(DESC, b));
             it.img = firstImage(rawDesc);
             if (it.img != null && !isContentImage(it.img)) it.img = null;
-            it.desc = stripHtml(rawDesc);
+            it.desc = plainText(rawDesc);
             it.link = clean(pick(LINK, b));
             it.time = shortTime(clean(pick(PUB, b)));
             it.source = sourceOf(feedUrl);
@@ -323,6 +327,19 @@ public class NewsFragment extends BaseFragment {
         return s;
     }
 
+    /** 不截断的纯文本：正文/摘要要完整，不能像标题那样截到 1200 字 */
+    private static String plainText(String s) {
+        if (s == null) return "";
+        s = s.replaceAll("(?i)<br\\s*/?>", "\n")
+                .replaceAll("(?i)</(p|div|li|h[1-6]|tr)>", "\n")
+                .replaceAll("<[^>]+>", "");
+        s = s.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'");
+        s = s.replaceAll("[ \\t\\u3000]+", " ");
+        s = s.replaceAll("\\n\\s*\\n+", "\n");
+        return s.trim();
+    }
+
     private static String sourceOf(String url) {
         if (url.contains("chinanews")) return "中新网";
         if (url.contains("people")) return "人民网";
@@ -423,6 +440,8 @@ public class NewsFragment extends BaseFragment {
         } catch (Throwable ignored) { }
         if (mEngineIdx < 0 || mEngineIdx > 1) mEngineIdx = 1;
         mVoiceSel = clampVoice(mVoiceSel);
+        // 插件每次被桌面重新加载都会走到这里：把上次崩溃/拔电留下的 tts 残留清一遍
+        trimTtsCache();
         FrameLayout root = new FrameLayout(ctx);        root.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.setPadding(dp(26), dp(100), dp(26), dp(10));
@@ -1077,7 +1096,7 @@ public class NewsFragment extends BaseFragment {
         Item cur = mFlat.get(i);
         mHeadKind.setText(i < 3 ? "头条" : "速览");
         mHeadTitle.setText(cur.title);
-        mDocText = cur.desc == null ? "" : cur.desc;
+        mDocText = trimArticleTail(cur.desc == null ? "" : cur.desc);
         hideWeb();
         java.util.List<Block> cachedDoc = (cur.link == null) ? null : mDocCache.get(cur.link);
         if (cachedDoc != null && !cachedDoc.isEmpty()) {
@@ -1253,21 +1272,63 @@ public class NewsFragment extends BaseFragment {
         return sb.length() == 0 ? null : sb.toString().trim();
     }
 
+    /** 正文容器关键词：class/id 命中这些才当前候选 */
+    private static final Pattern CONTAINER_KW = Pattern.compile(
+            "article|content|main|text|detail|post|body|cont_|news_txt|TRS_Editor",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 先找到正文所在的 div（整页 <p> 会把相关推荐、页脚一起抓进来），
+     * 返回容器内 HTML；找不到就退回整页。
+     */
+    private static String pickScope(String clean) {
+        Matcher m = Pattern.compile("(?is)<div\\b[^>]*(?:class|id)=\"([^\"]*)\"[^>]*>").matcher(clean);
+        int bestA = -1, bestB = -1, bestText = -1;         // 密度达标里文字最多的
+        int altA = -1, altB = -1, altDensity = -1;         // 退路：密度最高的
+        while (m.find()) {
+            if (!CONTAINER_KW.matcher(m.group(1)).find()) continue;
+            int start = m.end();
+            int end = divEnd(clean, start);
+            if (end <= start) continue;
+            String inner = clean.substring(start, end);
+            int text = plainText(inner).length();
+            if (text < 200) continue;
+            int density = (int) ((long) text * 1000 / Math.max(1, inner.length()));
+            if (density >= 180 && text > bestText) { bestText = text; bestA = start; bestB = end; }
+            if (density > altDensity) { altDensity = density; altA = start; altB = end; }
+        }
+        if (bestA >= 0) return clean.substring(bestA, bestB);
+        if (altA >= 0) return clean.substring(altA, altB);
+        return clean;
+    }
+
+    /** 从 div 开标签之后找到配对的 </div>，返回其起始位置 */
+    private static int divEnd(String s, int from) {
+        int depth = 1, i = from;
+        while (depth > 0) {
+            int o = s.indexOf("<div", i);
+            int c = s.indexOf("</div", i);
+            if (c < 0) return -1;
+            if (o >= 0 && o < c) { depth++; i = o + 4; }
+            else { depth--; i = c + 5; }
+        }
+        return i - 6;
+    }
+
     /** 把正文拆成“段落 / 图片”的顺序块 */
     private static java.util.List<Block> extractDoc(String html) {
         if (html == null) return null;
         String clean = html.replaceAll("(?is)<script[^>]*>.*?</script>", " ");
         clean = clean.replaceAll("(?is)<style[^>]*>.*?</style>", " ");
         clean = clean.replaceAll("(?is)<noscript[^>]*>.*?</noscript>", " ");
-        // 整页扫描：正文容器常是多层嵌套 div，按 class 截取反而只拿到一小段
-        String scope = clean;
+        String scope = pickScope(clean);
 
         java.util.List<Block> out = new ArrayList<Block>();
         Matcher m = Pattern.compile("<p\\b[^>]*>(.*?)</p>|<img\\b[^>]*>",
                 Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher(scope);
         while (m.find()) {
             if (m.group(1) != null) {
-                String t = stripHtml(clean(m.group(1)));
+                String t = plainText(clean(m.group(1)));
                 if (isTailMarker(t)) break;          // 相关阅读/责任编辑…：后面全是别的标题
                 int cut = tailCutIndex(t);           // 尾巴常和正文挤在同一段里
                 if (cut >= 0) {
@@ -1276,6 +1337,18 @@ public class NewsFragment extends BaseFragment {
                     break;
                 }
                 if (t.length() > 8 && !isNoiseLine(t)) {
+                    out.add(new Block(1, t));
+                }
+            }
+        }
+        // 有的站正文不用 <p>：按 <br>/块标签切一遍兜底
+        int total = 0;
+        for (Block b : out) if (b.type == 1) total += b.text.length();
+        if (total < 150) {
+            String plain = plainText(scope);
+            for (String line : plain.split("\n")) {
+                String t = line.trim();
+                if (t.length() > 8 && !isTailMarker(t) && !isNoiseLine(t)) {
                     out.add(new Block(1, t));
                 }
             }
@@ -1596,7 +1669,7 @@ public class NewsFragment extends BaseFragment {
         if (index < 0 || index >= mFlat.size()) return;
         if (mReading) { stopReading(); return; }
         Item it = mFlat.get(index);
-        String body = it.desc == null ? "" : it.desc;
+        String body = trimArticleTail(it.desc == null ? "" : it.desc);
         mReading = true;
         mReadIndex = index;
         mChain = false;
@@ -1606,10 +1679,33 @@ public class NewsFragment extends BaseFragment {
 
     private String currentText(Item it) {
         if (it == null) return "";
-        String body = it.desc == null ? "" : it.desc;
+        String body = trimArticleTail(it.desc == null ? "" : it.desc);
         String full = (it.link == null) ? null : mFullCache.get(it.link);
-        if (full != null && full.length() > body.length()) body = full;
+        if (full != null && full.length() > body.length()) body = trimArticleTail(full);
         return body.length() == 0 ? speakTitle(it.title) : (speakTitle(it.title) + "。" + body);
+    }
+
+    /**
+     * 摘要类文本（RSS/接口给的 desc）也常带一串别的标题：
+     * 先按「（完）/责任编辑/更多精彩内容…」截断，再剔掉末尾连续 2 条以上的标题行。
+     */
+    private static String trimArticleTail(String text) {
+        if (text == null) return "";
+        String t = text;
+        int cut = tailCutIndex(t);
+        if (cut > 0) t = t.substring(0, cut);
+        String[] lines = t.split("\n");
+        int end = lines.length;
+        while (end > 1 && isTitleLike(lines[end - 1].trim())) end--;
+        if (lines.length - end >= 2) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < end; i++) {
+                if (i > 0) sb.append('\n');
+                sb.append(lines[i]);
+            }
+            t = sb.toString();
+        }
+        return t.trim();
     }
 
     /** 朗读时去掉“视频丨/图集丨/直播丨”这类标签前缀 */
@@ -1901,12 +1997,14 @@ public class NewsFragment extends BaseFragment {
     private void playFile(final File f, final int index) {
         releasePlayer();
         try {
+            mPlayingFile = f;
             mPlayer = new android.media.MediaPlayer();
             mPlayer.setDataSource(f.getAbsolutePath());
             final long t0 = System.currentTimeMillis();
             mPlayer.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
                 @Override public void onCompletion(android.media.MediaPlayer mp) {
                     Log.w("done " + f.getName() + " after " + (System.currentTimeMillis() - t0) + "ms");
+                    if (mPlayingFile == f) mPlayingFile = null;
                     try { f.delete(); } catch (Throwable ignored) { }   // 这段播完就删
                     onChunkDone(index);
                 }
@@ -1945,6 +2043,7 @@ public class NewsFragment extends BaseFragment {
             fos.close();
             fos = null;
             is.close();
+            if (name.startsWith("tts_")) trimTtsCache();   // 边下边控总量
             return out;
         } catch (Throwable t) {
             Log.w("dl fail " + t);
@@ -1987,6 +2086,7 @@ public class NewsFragment extends BaseFragment {
         mReadIndex = -1;
         clearPrefetch();
         releasePlayer();
+        mPlayingFile = null;
         cleanTtsFiles();
         status("");
         refreshRows();
@@ -1999,9 +2099,55 @@ public class NewsFragment extends BaseFragment {
             File[] fs = dir.listFiles();
             if (fs == null) return;
             for (File f : fs) {
-                String n = f.getName();
-                if (n.startsWith("tts_") && n.endsWith(".mp3")) f.delete();
+                if (isTtsFile(f)) f.delete();
             }
+        } catch (Throwable ignored) { }
+    }
+
+    private static boolean isTtsFile(File f) {
+        String n = f.getName();
+        return n.endsWith(".mp3")
+                && (n.startsWith("tts_") || n.equals("tts.mp3") || n.equals("tts_edge.mp3"));
+    }
+
+    /**
+     * 滚动清理：目录里 TTS 文件超过上限（默认 8MB）就从最旧的开始删，
+     * 正在播放的、刚预取还没播的都跳过；超过 24 小时的也一并清掉。
+     * 电视只有 8G，不能指望"播完就删"永远不出岔子（崩溃/拔电都会留残file）。
+     */
+    private void trimTtsCache() {
+        try {
+            File dir = mCtx.getCacheDir();
+            File[] fs = dir.listFiles();
+            if (fs == null) return;
+            long now = System.currentTimeMillis();
+            long total = 0;
+            java.util.List<File> list = new java.util.ArrayList<File>();
+            for (File f : fs) {
+                if (!f.isFile() || !isTtsFile(f)) continue;
+                if (now - f.lastModified() > 24L * 3600 * 1000) {
+                    f.delete();
+                    continue;
+                }
+                list.add(f);
+                total += f.length();
+            }
+            if (total <= TTS_CACHE_MAX) return;
+            final java.util.HashSet<File> keep = new java.util.HashSet<File>();
+            if (mPlayingFile != null) keep.add(mPlayingFile);
+            synchronized (mPrefLock) { keep.addAll(mPrefMap.values()); }
+            java.util.Collections.sort(list, new java.util.Comparator<File>() {
+                @Override public int compare(File a, File b) {
+                    return Long.compare(a.lastModified(), b.lastModified());
+                }
+            });
+            for (File f : list) {
+                if (total <= TTS_CACHE_MAX / 2) break;
+                if (keep.contains(f)) continue;
+                long n = f.length();
+                if (f.delete()) total -= n;
+            }
+            Log.w("tts cache trimmed to " + total + "B");
         } catch (Throwable ignored) { }
     }
 
