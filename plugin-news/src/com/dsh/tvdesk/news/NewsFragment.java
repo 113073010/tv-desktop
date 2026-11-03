@@ -1446,7 +1446,16 @@ public class NewsFragment extends BaseFragment {
                     if (mHeadCard != null) mHeadCard.requestFocus();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
-                    if (mChips[mTab] != null) mChips[mTab].requestFocus();
+                    // 先在左侧区域回到第一条新闻，再按一次才到分类条
+                    if (mOffset != 0 || mFocus != 0) {
+                        mOffset = 0;
+                        mFocus = 0;
+                        refreshRows();
+                        updateSide();
+                        if (mRows[0] != null) mRows[0].requestFocus();
+                    } else if (mChips[mTab] != null) {
+                        mChips[mTab].requestFocus();
+                    }
                     return true;
                 case KeyEvent.KEYCODE_BACK:
                     if (mReading) { stopReading(); return true; }
