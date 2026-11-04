@@ -122,6 +122,36 @@
 
 最省事的方式是用 `release/` 里的 `launcher_new.db` 直接覆盖（已含 5 个插件的登记），再执行 `restore.sh`。
 
+### 刷机后快速恢复
+
+电视刷完机、什么都没了，按下面四步把五个 Tab 装回来：
+
+**第一步：下载恢复包**
+
+打开 [Releases 页面](https://github.com/113073010/tv-desktop/releases/latest)，下载最新的 `tv-desktop-vX.X.X-restore.zip`，解压到电脑上。
+
+**第二步：把文件推到电视上**
+
+```bash
+adb push 解压目录/ /data/local/tmp/tvrestore
+```
+
+**第三步：在电视上执行恢复脚本**
+
+```bash
+adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh'
+```
+
+脚本会自动把 5 个 APK 装到桌面插件目录、覆盖数据库、并重启桌面。
+
+**第四步：等电视重启完**
+
+回到电视桌面，顶部 Tab 栏应该能看到新闻、直播、豆瓣、电台、股票五个新 Tab。
+
+> 如果脚本提示数据库和 APK 校验不一致，先跑一次 `python release/check-db.py --fix`，或者加 `--force` 强制执行。
+>
+> 直播频道表需要自己放到 `/sdcard/DIYP影音/*.txt`（DIYP 格式，`#` 开头是分组），脚本不带频道源。
+
 换过 APK 之后，先在 PC 上跑一次：
 
 ```bash
