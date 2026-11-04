@@ -689,8 +689,12 @@ public class DoubanFragment extends BaseFragment {
         mFocusIndex = 0;
         mFlat.clear();
         refreshSlots();
-        // 切换后焦点留在刚选的这个分类上
-        if (idx >= 0 && idx < mChips.length && mChips[idx] != null) {
+        // 切换后焦点留在刚选的这个分类上。
+        // 但页面创建时（onInflaterContent 末尾的 switchTab(0)）视图还没 attach，
+        // 此时 requestFocus() 会让一个屏幕外的分类抢走焦点，导致开机后 Tab 栏没有焦点框。
+        // 只有已经 attach 到窗口（getWindowToken() != null）时才主动聚焦。
+        if (idx >= 0 && idx < mChips.length && mChips[idx] != null
+                && mChips[idx].getWindowToken() != null) {
             mChips[idx].requestFocus();
         }
         ensureLoaded(idx);
