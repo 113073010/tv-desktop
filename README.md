@@ -1,6 +1,8 @@
 # 乐视超级电视 X3-55 桌面插件五件套
 
 > 不重做 Launcher，只在乐视原生桌面上增加自己想要的 **Tab**：新闻、直播、豆瓣荐片、电台、股票。
+>
+> 新闻和股票另外提供**独立 APK**：装完从应用列表直接启动，不依赖桌面 Tab。
 
 ![股票](docs/images/stock-main.jpg)
 
@@ -17,6 +19,22 @@
 | 豆瓣荐片 | `com.dsh.tvdesk.douban` | 豆瓣海报墙，点击交给 TVBox 搜索播放 |
 | 电台 | `com.dsh.tvdesk.radio` | 15 个电台，5 个分类，底部播放条可遥控操作 |
 | 股票 | `com.dsh.tvdesk.stock` | 油价 / 黄金 / 国内指数 / 国际大盘 / 基金 / 自选 |
+
+### 独立应用（新闻 / 股票）
+
+新闻和股票也能打成两个**普通 APK**，装完在电视的应用列表里直接启动，不需要 `com.stv.launcher` 的插件机制：
+
+| 应用 | 包名 | 源码 | 产物 |
+|---|---|---|---|
+| 新闻 | `com.dsh.tvdesk.news.app` | `app-news/` | `news-app.apk` |
+| 股票 | `com.dsh.tvdesk.stock.app` | `app-stock/` | `stock-app.apk` |
+
+- 页面代码和插件版共用（`plugin-news/src`、`plugin-stock/src`），只是把宿主从桌面 Tab 换成 `app-host/` 里的 `HostActivity`
+- 独立版没有插件的 `meta-data`，不会出现在桌面 Tab 栏
+- 没有桌面 Tab 条，顶部留白从 96/100dp 收到 22dp；返回键退到分类条后再按一次退出
+- 语音设置存在应用自己的 `SharedPreferences`；自选股、油价缓存仍在 `/sdcard/tvdesk/`，和插件版共用
+
+实现细节和构建说明见 [docs/STANDALONE.md](docs/STANDALONE.md)。
 
 ## 功能一览
 
@@ -122,6 +140,15 @@
 
 最省事的方式是用 `release/` 里的 `launcher_new.db` 直接覆盖（已含 5 个插件的登记），再执行 `restore.sh`。
 
+### 安装独立应用
+
+独立版就是普通 APK，直接装即可（和插件版可以同时存在）：
+
+```bash
+adb install -r release/news-app.apk
+adb install -r release/stock-app.apk
+```
+
 ### 刷机后快速恢复
 
 电视刷完机、什么都没了，按下面四步把五个 Tab 装回来：
@@ -182,6 +209,9 @@ plugin-live/     直播插件源码
 plugin-douban/   豆瓣荐片插件源码
 plugin-radio/    电台插件源码
 plugin-stock/    股票插件源码
+app-news/        新闻独立应用（AndroidManifest.xml + Activity + res + build.ps1）
+app-stock/       股票独立应用
+app-host/        独立应用宿主层（HostActivity + support-v4 / launcher SDK 垫片 + 构建脚本）
 release/         签名后的 APK、数据库模板、部署脚本、check-db.py
 docs/            逆向笔记（插件机制、踩坑、真机实测）
 ```
@@ -193,6 +223,8 @@ docs/            逆向笔记（插件机制、踩坑、真机实测）
 ```
 javac → d8 → aapt2 link → 塞入 dex → zipalign → apksigner
 ```
+
+独立应用用 `app-news\build.ps1`、`app-stock\build.ps1`，流程一样，额外编译 `res/` 图标和 banner。产物在各自 `build/` 下，加 `-Release` 会复制到 `release/`。
 
 需要 JDK 17 + Android build-tools 34。
 

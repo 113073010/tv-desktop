@@ -1683,7 +1683,17 @@ public class NewsFragment extends BaseFragment {
         }
     };
 
+    /** 独立 APK 的宿主 Activity 实现这个接口；桌面插件宿主不实现，返回键交给桌面。 */
+    public interface Host {
+        void onHostBack();
+    }
+
     private void goToTabBar() {
+        android.app.Activity act = getActivity();
+        if (act instanceof Host) {
+            ((Host) act).onHostBack();
+            return;
+        }
         View byText = findByText(mRoot.getRootView(), "新闻", 0);
         if (byText != null) {
             View target = byText;
