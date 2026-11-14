@@ -8,7 +8,8 @@ out/
 *.class
 *.jar
 
-# 签名
+# 签名（signing/README.md 入库，key 本身不入库；首次构建会自动生成）
+signing/*.jks
 *.jks
 *.keystore
 *.p12
@@ -22,6 +23,7 @@ tvdesk-*.zip
 tmp/
 probe/
 shots/
+.adbtmp/
 *.log
 *.xml.bak
 
