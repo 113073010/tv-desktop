@@ -1,4 +1,4 @@
-# 乐视超级电视 X3-55 桌面插件
+# 乐视超级电视 X3-55 桌面插件五件套
 
 > 不重做 Launcher，只在乐视原生桌面上增加自己想要的 **Tab**：新闻、直播、豆瓣荐片、电台、股票。
 >
@@ -6,7 +6,7 @@
 
 ![股票](docs/images/stock-main.jpg)
 
-**文档**：[架构](docs/ARCHITECTURE.md) · [刷机恢复](docs/RESTORE.md) · [真机实测记录](docs/DEVICE.md) · [独立应用](docs/STANDALONE.md) · [语音桥](docs/edge-tts.md) · [变更记录](CHANGELOG.md)
+**文档**：[架构](docs/ARCHITECTURE.md) · [刷机恢复](docs/RESTORE.md) · [真机实测记录](docs/DEVICE.md) · [开发历程](docs/HISTORY.md) · [独立应用](docs/STANDALONE.md) · [语音桥](docs/edge-tts.md) · [变更记录](CHANGELOG.md)
 
 ## 这是什么
 
