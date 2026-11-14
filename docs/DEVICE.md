@@ -28,7 +28,7 @@
 
 | 文件 | 大小 | MD5 | 说明 |
 |---|---:|---|---|
-| `news.apk` | 49551 | `F94B9FD103E54BEF38944EC94B2B7F19` | 新闻 1.0.16 / 66 |
+| `news.apk` | 49551 | `D19E880C4569E5949B8B950C1D0F0BF8` | 新闻 1.0.17 / 67 |
 | `live.apk` | 61839 | `4694EA88D87672AC93EA0404C3A6FA4F` | 直播 1.4.0 / 27 |
 | `douban.apk` | 24975 | `272F5971C10D3F078A0AA2BCE60A63B5` | 豆瓣荐片 1.0.1 / 46 |
 | `radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` | 电台 1.4.4 / 26 |
@@ -189,6 +189,28 @@ adb shell su -c 'busybox grep -a -c RootFrame /data/data/com.stv.launcher/files/
 - 详情面板改读 `OilPrice.cachedNextAdjust()`，每次进油价栏（包括原地刷新）都后台算一次；算完只重绘这一格
 
 2026-11-14 真机验证（1.1.6 / 17）：日志 `nextAdjust=2026-11-27 calendar=2026-11-27`，界面显示 `11月27日（预计）`。
+
+---
+
+## 军事新闻详情不显示发布日期（1.0.17）
+
+**现象**：新闻 TAB → 军事 → 点开任意一条，右下角来源行只有 `凤凰军事`，没有发布时间；其他几个 RSS 分类都正常显示 `· 06:20`。
+
+**原因**：军事分类没有 RSS，走的是网页抓取 `parseHtmlList()`，里面把 `it.time` 直接写死成空串。凤凰军事的列表页确实没有 `<time>` 标签，发布时间只存在于页面内嵌 JSON 的 `"url" … "newsTime"` 字段里，之前完全没解析。
+
+**改法**（`plugin-news/src/.../NewsFragment.java`，独立版共用同一份源码）：
+
+- `parseHtmlList()` 先扫一遍内嵌 JSON，建立「文章 id（`/c/xxxx`）→ 发布时间」映射，命中就填 `Item.time`
+- 列表 JSON 里没有的条目（轮播/推荐位），在抓正文时从文章页 `<meta property="article:published_time">` 或 `<time itemProp="datePublished">` 补，抓到后刷新来源行
+- 时间统一格式化成 `11月14日 06:20`，来源行由 `metaLine()` 拼接，没有日期时不留下多余的分隔点
+
+2026-11-14 真机验证：
+
+- Letv X3-55（`192.168.1.9`，插件 1.0.17 / 67）：军事详情显示 `凤凰军事 · 11月14日 06:49`
+- `192.168.1.3`（独立版 1.0.1 / 2）：显示 `凤凰军事 · 11月14日 06:10`
+
+> 换 APK 后桌面会继续用 `plugins_data/<包名>/dex/news.dex` 里的旧类。
+> 只 `am force-stop` 有时杀不掉主进程，要么 `kill -9 <pid>`，要么删掉该包 `plugins_data` 目录再重启桌面。
 
 ---
 

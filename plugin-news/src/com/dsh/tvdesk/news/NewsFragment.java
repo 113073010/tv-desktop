@@ -138,6 +138,9 @@ public class NewsFragment extends BaseFragment {
             new java.util.HashMap<String, java.util.List<String>>();
     private final java.util.Map<String, String> mFullCache =
             java.util.Collections.synchronizedMap(new java.util.HashMap<String, String>());
+    /** 文章页发布时间缓存：key = link → 已格式化的「11月14日 06:20」 */
+    private final java.util.Map<String, String> mDateCache =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<String, String>());
     private java.util.List<String> mChunks = new ArrayList<String>();
     private int mChunkIdx = 0;
     private final Object mPrefLock = new Object();
@@ -240,6 +243,8 @@ public class NewsFragment extends BaseFragment {
         List<Item> out = new ArrayList<Item>();
         try {
             java.util.Set<String> seen = new java.util.HashSet<String>();
+            // 列表页里没有 <time> 标签，发布时间藏在内嵌 JSON 的 newsTime 字段
+            java.util.Map<String, String> times = extractListTimes(html);
             Matcher m = Pattern.compile(
                     "<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([^<]{8,80})</a>",
                     Pattern.DOTALL).matcher(html);
@@ -259,7 +264,7 @@ public class NewsFragment extends BaseFragment {
                 it.title = title;
                 it.desc = "";
                 it.link = href;
-                it.time = "";
+                it.time = lookupListTime(times, href);
                 it.source = sourceOf(baseUrl);
                 out.add(it);
             }
@@ -427,6 +432,87 @@ public class NewsFragment extends BaseFragment {
         Matcher m = Pattern.compile("(\\d{2}):(\\d{2})").matcher(s);
         if (m.find()) return m.group(0);
         return s.length() > 16 ? s.substring(0, 16) : s;
+    }
+
+    // ---------- 发布时间 ----------
+
+    private static final Pattern ARTICLE_ID = Pattern.compile("/c/([A-Za-z0-9]{6,})");
+    private static final Pattern JSON_URL_TIME = Pattern.compile(
+            "\"url\"\\s*:\\s*\"[^\"]*?/c/([A-Za-z0-9]{6,})\"[^{}]{0,600}?\"newsTime\"\\s*:\\s*\"([^\"]+)\"");
+
+    /** 网页列表页（凤凰军事）内嵌 JSON 里 url / newsTime 成对出现：抓出「文章 id → 发布时间」 */
+    private static java.util.Map<String, String> extractListTimes(String html) {
+        java.util.Map<String, String> out = new java.util.HashMap<String, String>();
+        if (html == null) return out;
+        try {
+            Matcher m = JSON_URL_TIME.matcher(html);
+            while (m.find()) {
+                String id = m.group(1);
+                String t = formatDateTime(m.group(2));
+                if (id != null && id.length() > 0 && t.length() > 0 && !out.containsKey(id)) {
+                    out.put(id, t);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w("list time fail " + t);
+        }
+        return out;
+    }
+
+    /** 按链接里的文章 id 取发布时间；取不到返回空串 */
+    private static String lookupListTime(java.util.Map<String, String> times, String href) {
+        if (times == null || times.isEmpty() || href == null) return "";
+        Matcher m = ARTICLE_ID.matcher(href);
+        if (!m.find()) return "";
+        String t = times.get(m.group(1));
+        return t == null ? "" : t;
+    }
+
+    /**
+     * 统一成「11月14日 06:20」：支持
+     * 2026-11-14 06:20:54 / 2026-11-14T06:20:54+08:00 两种写法；认不出就截到 16 字
+     */
+    private static String formatDateTime(String s) {
+        if (s == null) return "";
+        s = s.trim();
+        if (s.length() == 0) return "";
+        Matcher m = Pattern.compile("(\\d{4})-(\\d{1,2})-(\\d{1,2})[ T](\\d{1,2}):(\\d{2})").matcher(s);
+        if (m.find()) {
+            return String.format(Locale.US, "%d月%d日 %02d:%s",
+                    Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)),
+                    Integer.parseInt(m.group(4)), m.group(5));
+        }
+        return s.length() > 16 ? s.substring(0, 16) : s;
+    }
+
+    /** 文章页里的发布时间：优先 og/结构化 meta，其次页面上的 <time dateTime> */
+    private static String extractPageDate(String html) {
+        if (html == null) return null;
+        try {
+            String head = html.length() > 200000 ? html.substring(0, 200000) : html;
+            Matcher m = Pattern.compile(
+                    "property=[\"']article:published_time[\"'][^>]*content=[\"']([^\"']+)[\"']",
+                    Pattern.CASE_INSENSITIVE).matcher(head);
+            if (m.find()) return formatDateTime(m.group(1));
+            m = Pattern.compile(
+                    "content=[\"']([^\"']+)[\"'][^>]*property=[\"']article:published_time[\"']",
+                    Pattern.CASE_INSENSITIVE).matcher(head);
+            if (m.find()) return formatDateTime(m.group(1));
+            m = Pattern.compile(
+                    "itemProp=[\"']datePublished[\"'][^>]*dateTime=[\"']([^\"']+)[\"']",
+                    Pattern.CASE_INSENSITIVE).matcher(head);
+            if (m.find()) return formatDateTime(m.group(1));
+        } catch (Throwable t) {
+            Log.w("page date fail " + t);
+        }
+        return null;
+    }
+
+    /** 详情页底部来源行：没有日期时不留多余的分隔点 */
+    private static String metaLine(Item it) {
+        if (it == null) return "";
+        String t = it.time == null ? "" : it.time.trim();
+        return (it.source == null ? "" : it.source) + (t.length() == 0 ? "" : " · " + t);
     }
 
     private void ensureLoaded(final int tab) {
@@ -1189,7 +1275,12 @@ public class NewsFragment extends BaseFragment {
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             }
         }
-        mHeadMeta.setText(cur.source + (cur.time == null || cur.time.isEmpty() ? "" : " · " + cur.time));
+        if ((cur.time == null || cur.time.isEmpty()) && cur.link != null) {
+            // 列表页没带日期（部分网页列表）：标题页缓存里如果已经抓到就补上
+            String d = mDateCache.get(cur.link);
+            if (d != null && d.length() > 0) cur.time = d;
+        }
+        mHeadMeta.setText(metaLine(cur));
         if (mDetailScroll != null) mDetailScroll.scrollTo(0, 0);
         if (loadBody) loadFullText(cur, i);
     }
@@ -1208,6 +1299,7 @@ public class NewsFragment extends BaseFragment {
                 mHeadDesc.setText(cached);
                 if (mDetailScroll != null) mDetailScroll.scrollTo(0, 0);
             }
+            applyTimeToMeta(it, index);
             if (onReady != null) onReady.run();
             return;
         }
@@ -1215,6 +1307,9 @@ public class NewsFragment extends BaseFragment {
             @Override public void run() {
                 final String full = fetchBody(it.link);
                 if (full == null || full.length() < 200) {
+                    mMain.post(new Runnable() {
+                        @Override public void run() { applyTimeToMeta(it, index); }
+                    });
                     if (onReady != null) mMain.post(onReady);
                     return;
                 }
@@ -1231,11 +1326,24 @@ public class NewsFragment extends BaseFragment {
                             }
                             if (mDetailScroll != null) mDetailScroll.scrollTo(0, 0);
                         }
+                        applyTimeToMeta(it, index);
                         if (onReady != null) onReady.run();
                     }
                 });
             }
         });
+    }
+
+    /** 正文页抓回来后才有的发布时间：补进条目和底部来源行（列表页缺日期时） */
+    private void applyTimeToMeta(Item it, int index) {
+        if (it == null) return;
+        if ((it.time == null || it.time.isEmpty()) && it.link != null) {
+            String d = mDateCache.get(it.link);
+            if (d != null && d.length() > 0) it.time = d;
+        }
+        if (mHeadMeta != null && index == readBase()) {
+            mHeadMeta.setText(metaLine(it));
+        }
     }
 
     private String fetchBody(String url) {
@@ -1254,6 +1362,8 @@ public class NewsFragment extends BaseFragment {
             while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
             is.close();
             String html = new String(bos.toByteArray(), "UTF-8");
+            String date = extractPageDate(html);
+            if (date != null && date.length() > 0) mDateCache.put(url, date);
             java.util.List<Block> doc = extractDoc(html);
             if (doc != null && !doc.isEmpty()) mDocCache.put(url, doc);
             encodeText(doc);

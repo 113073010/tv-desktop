@@ -138,11 +138,11 @@ INSERT INTO SCREEN_INFO (
 
 | 插件 | 包名 | versionName | versionCode | APK | 大小 | MD5 |
 |---|---|---|---|---|---|---|
-| 新闻 | `com.dsh.tvdesk.news` | 1.0.16 | 66 | `release/news.apk` | 49551 | `F94B9FD103E54BEF38944EC94B2B7F19` |
+| 新闻 | `com.dsh.tvdesk.news` | 1.0.17 | 67 | `release/news.apk` | 49551 | `D19E880C4569E5949B8B950C1D0F0BF8` |
 | 直播 | `com.dsh.tvdesk.live` | 1.4.0 | 27 | `release/live.apk` | 61839 | `4694EA88D87672AC93EA0404C3A6FA4F` |
 | 豆瓣荐片 | `com.dsh.tvdesk.douban` | 1.0.1 | 46 | `release/douban.apk` | 24975 | `272F5971C10D3F078A0AA2BCE60A63B5` |
 | 电台 | `com.dsh.tvdesk.radio` | 1.4.4 | 26 | `release/radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` |
-| 股票 | `com.dsh.tvdesk.stock` | 1.1.5 | 16 | `release/stock.apk` | 57743 | `1A87D2A72CACFD908CD299E1ADAE8DBC` |
+| 股票 | `com.dsh.tvdesk.stock` | 1.1.6 | 17 | `release/stock.apk` | 57743 | `EBA25E36F6D33067F640DB863F8E24A5` |
 
 > 重建 APK 后大小和 MD5 一定会变，不要手抄上表；跑 `python release/check-db.py --fix` 自动同步。
 
