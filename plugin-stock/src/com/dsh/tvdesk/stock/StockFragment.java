@@ -117,6 +117,8 @@ public class StockFragment extends BaseFragment {
     private String mLastOilName = "吉林";
     /** 正在抓全国油价：挡住切栏/切回时叠出来的第二轮请求 */
     private boolean mOilLoading = false;
+    /** 正在算下次调价日期（后台） */
+    private boolean mNextLoading = false;
     /** 抓取代次：上一轮的慢响应回来了也直接丢掉，不会盖掉新数据 */
     private int mOilGen = 0;
     /** 31 省都有价格了（用来判断切回分类时要不要再抓） */
@@ -377,6 +379,7 @@ public class StockFragment extends BaseFragment {
                     && mItems.get(0).kind == 2;
             if (inPlace) {
                 loadAllOil(false);
+                loadNextAdjust();
                 return;
             }
             List<QuoteApi.Item> list = new ArrayList<QuoteApi.Item>();
@@ -401,16 +404,7 @@ public class StockFragment extends BaseFragment {
             }
             loadAllOil(false);
             // 下次调价日期需要联网推算，放后台
-            mOilPool.execute(new Runnable() {
-                @Override public void run() {
-                    OilPrice.computeNextAdjust();
-                    mMain.post(new Runnable() {
-                        @Override public void run() {
-                            if (mTab == TAB_OIL && mOil != null) applyOil(mOil);
-                        }
-                    });
-                }
-            });
+            loadNextAdjust();
             if (!mItems.isEmpty()) {
                 int def = oilIndex("吉林");
                 mFocus = def;
@@ -1685,6 +1679,23 @@ public class StockFragment extends BaseFragment {
         });
     }
 
+    /** 后台算下次调价日期；算完如果详情区正停在油价上，刷新那两格 */
+    private void loadNextAdjust() {
+        if (mNextLoading) return;
+        mNextLoading = true;
+        mOilPool.execute(new Runnable() {
+            @Override public void run() {
+                OilPrice.computeNextAdjust();
+                mMain.post(new Runnable() {
+                    @Override public void run() {
+                        mNextLoading = false;
+                        if (mTab == TAB_OIL && mOil != null) applyOil(mOil);
+                    }
+                });
+            }
+        });
+    }
+
     /** 近一年每次调价后的 92# 价格曲线 */
     private void loadOilHistory(final String province, final String slug, final String base92) {
         final java.util.List<Float> cached = HistoryCache.get(slug + "@" + base92);
@@ -1742,7 +1753,7 @@ public class StockFragment extends BaseFragment {
         setStats(new String[]{
                 "0#柴油", oil.p0, "-10#柴油", oil.p10,
                 "-20#柴油", oil.p20, "-35#柴油", oil.p35,
-                "下次调价", oil.adjustDate,
+                "下次调价", OilPrice.cachedNextAdjust(),
                 "预计调整", forecastText(oil)});
 
         // 预计调整按涨跌上色：涨红跌绿

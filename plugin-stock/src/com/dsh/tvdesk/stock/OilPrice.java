@@ -144,6 +144,8 @@ public class OilPrice {
     private static List<Adjust> sAdj = null;
     private static long sAdjAt = 0;
     private static boolean sAdjLoaded = false;
+    /** soyoujia 调价日历给出的下一个调价窗口（yyyy-MM-dd），空表示这次没取到 */
+    private static String sNextDate = "";
 
     /**
      * 调价时间表：优先 soyoujia（数据新），失败退回 qiyoujiage。
@@ -189,6 +191,10 @@ public class OilPrice {
                     try { at = Long.parseLong(line.substring(4).trim()); } catch (Throwable ignored) { }
                     continue;
                 }
+                if (line.startsWith("#next=")) {
+                    sNextDate = line.substring(6).trim();
+                    continue;
+                }
                 if (line.length() == 0 || line.startsWith("#")) continue;
                 String[] p = line.split("\t", -1);
                 if (p.length < 2 || p[0].length() < 8) continue;
@@ -199,6 +205,9 @@ public class OilPrice {
             }
             if (System.currentTimeMillis() - at > ADJ_TTL) out.clear();
             else sAdjAt = at;
+            // 缓存的「下次调价」已经过去：别继续拿出来当未来日期用，
+            // 交给 computeNextAdjust() 重新联网取，取不到就按上次调价日推算。
+            if (sNextDate.length() > 0 && sNextDate.compareTo(today(0)) < 0) sNextDate = "";
         } catch (Throwable t) {
             Diag.log("oil", "adjusts read fail " + t.getClass().getSimpleName());
             out.clear();
@@ -216,6 +225,7 @@ public class OilPrice {
         try {
             w = new OutputStreamWriter(new FileOutputStream(f), "UTF-8");
             w.write("#ts=" + at + "\n");
+            if (sNextDate != null && sNextDate.length() == 10) w.write("#next=" + sNextDate + "\n");
             for (Adjust a : list) {
                 w.write(a.date + "\t" + a.gasolinePerTon + "\n");
             }
@@ -256,6 +266,10 @@ public class OilPrice {
                 out.add(a);
                 if (out.size() >= 40) break;
             }
+            // 日历里已经列出下一个调价窗口（结果还是「未公布」），
+            // 直接用它比按工作日硬算更准（遇到法定节假日也不会错）
+            String next = pickNextDate(html, out);
+            if (next.length() > 0) sNextDate = next;
         } catch (Throwable t) {
             Diag.log("oil", "soyoujia fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
         }
@@ -350,8 +364,10 @@ public class OilPrice {
         }
     }
 
-    /** 下次调价：上次调价日 + 10 个工作日（发改委规则），标「预计」 */
+    /** 下次调价：优先用 soyoujia 日历里的窗口，取不到再按上次调价日 + 10 个工作日推算 */
     private static String sNextCache = null;
+    private static long sNextCacheAt = 0;
+    private static final long NEXT_TTL = 30 * 60 * 1000L;
 
     /** 主线程调用：只读缓存，不联网 */
     public static String cachedNextAdjust() {
@@ -360,25 +376,107 @@ public class OilPrice {
 
     /** 后台线程调用：真正联网推算 */
     public static String computeNextAdjust() {
-        if (sNextCache != null) return sNextCache;
+        long now = System.currentTimeMillis();
+        if (sNextCache != null && now - sNextCacheAt < NEXT_TTL) return sNextCache;
         try {
             java.util.List<Adjust> list = fetchAdjusts();
-            if (list.isEmpty()) return "待公布";
-            String d = list.get(0).date;              // yyyy-MM-dd
-            java.text.SimpleDateFormat in = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
-            java.util.Date dt = in.parse(d);
+            String next = sNextDate;
+            // 缓存的日期已经过去：调价表可能还没跟上，忽略 6 小时 TTL 再抓一次
+            if (next.length() > 0 && next.compareTo(today(0)) < 0) {
+                sAdjAt = 0;
+                list = fetchAdjusts();
+                next = sNextDate;
+            }
+            if (next.length() < 10) next = addWorkdays(list, 10);
+            // 实在推不出未来日期就别把过去的日期当「下次」显示
+            if (next.length() < 10 || next.compareTo(today(0)) < 0) {
+                Diag.log("oil", "nextAdjust stale, latest="
+                        + (list.isEmpty() ? "-" : list.get(0).date));
+                sNextCache = "待公布";
+                sNextCacheAt = 0;
+                return sNextCache;
+            }
+            sNextCache = formatNext(next);
+            sNextCacheAt = now;
+            Diag.log("oil", "nextAdjust=" + next + " calendar=" + sNextDate);
+            return sNextCache;
+        } catch (Throwable t) {
+            Diag.log("oil", "nextAdjust fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
+            sNextCache = "待公布";
+            sNextCacheAt = 0;
+            return sNextCache;
+        }
+    }
+
+    /** 今天的 yyyy-MM-dd，offsetDays 为偏移天数 */
+    private static String today(int offsetDays) {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.add(java.util.Calendar.DAY_OF_MONTH, offsetDays);
+        return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                .format(c.getTime());
+    }
+
+    /**
+     * 从 soyoujia 调价日历里找最近一个还没到的窗口。
+     * 页面把未来月份也列出来了（结果写「未公布」），所以比按工作日硬算更准；
+     * 跳过今天以前的、以及上次实际调价日（含）之前的日期。
+     */
+    private static String pickNextDate(String html, java.util.List<Adjust> actual) {
+        String latest = "";
+        if (actual != null) {
+            for (Adjust a : actual) {
+                if (a != null && a.date.compareTo(latest) > 0) latest = a.date;
+            }
+        }
+        String now = today(0);
+        String best = "";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<span>(20\\d\\d-\\d{2}-\\d{2})</span>").matcher(html);
+        while (m.find()) {
+            String d = m.group(1);
+            if (d.compareTo(now) < 0) continue;
+            if (latest.length() > 0 && d.compareTo(latest) <= 0) continue;
+            if (best.length() == 0 || d.compareTo(best) < 0) best = d;
+        }
+        return best;
+    }
+
+    /** 上次调价日 + 10 个工作日（发改委规则，不含法定节假日修正） */
+    private static String addWorkdays(java.util.List<Adjust> list, int days) {
+        String latest = "";
+        if (list != null) {
+            for (Adjust a : list) {
+                if (a != null && a.date.compareTo(latest) > 0) latest = a.date;
+            }
+        }
+        if (latest.length() < 10) return "";
+        try {
+            java.text.SimpleDateFormat in =
+                    new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
             java.util.Calendar c = java.util.Calendar.getInstance();
-            c.setTime(dt);
+            c.setTime(in.parse(latest));
             int work = 0;
-            while (work < 10) {
+            while (work < days) {
                 c.add(java.util.Calendar.DAY_OF_MONTH, 1);
                 int dow = c.get(java.util.Calendar.DAY_OF_WEEK);
                 if (dow != java.util.Calendar.SATURDAY && dow != java.util.Calendar.SUNDAY) work++;
             }
-            sNextCache = (c.get(java.util.Calendar.MONTH) + 1) + "月" + c.get(java.util.Calendar.DAY_OF_MONTH) + "日（预计）";
-            return sNextCache;
+            return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                    .format(c.getTime());
         } catch (Throwable t) {
-            Diag.log("oil", "nextAdjust fail " + t.getClass().getSimpleName() + ":" + t.getMessage());
+            return "";
+        }
+    }
+
+    /** yyyy-MM-dd → 11月27日（预计）；跨年时带年份 */
+    private static String formatNext(String ymd) {
+        try {
+            int month = Integer.parseInt(ymd.substring(5, 7));
+            int day = Integer.parseInt(ymd.substring(8, 10));
+            String prefix = ymd.substring(0, 4).equals(today(0).substring(0, 4))
+                    ? "" : ymd.substring(0, 4) + "年";
+            return prefix + month + "月" + day + "日（预计）";
+        } catch (Throwable t) {
             return "待公布";
         }
     }
