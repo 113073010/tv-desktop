@@ -110,7 +110,7 @@
 把 7 段拼回原文再用**旧算法**跑一遍，第 2 段正好停在 `…现汇率约合 7,665.`，
 第 3 段从数字开头——这就是“点”被吞掉的现场；新算法把切点提前到前一个逗号，数字保持完整。
 
-跑一遍离线测试（先执行过 `plugin-news/build.ps1`）：
+跑一遍离线测试（先执行过 `.\build.ps1 -Target news`，`build\stubs.jar` 会带上共享桩）：
 
 ```powershell
 $root  = "D:\deepseek\tv-desktop"

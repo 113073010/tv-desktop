@@ -144,7 +144,8 @@ INSERT INTO SCREEN_INFO (
 | 电台 | `com.dsh.tvdesk.radio` | 1.4.4 | 26 | `release/radio.apk` | 20879 | `C2B533CD69C260651D96AC08C61EDB11` |
 | 股票 | `com.dsh.tvdesk.stock` | 1.1.6 | 17 | `release/stock.apk` | 57743 | `EBA25E36F6D33067F640DB863F8E24A5` |
 
-> 重建 APK 后大小和 MD5 一定会变，不要手抄上表；跑 `python release/check-db.py --fix` 自动同步。
+> 重建 APK 后大小和 MD5 一定会变，不要手抄上表；跑 `.\scripts\sync-db.ps1` 自动同步
+> （或 `python release/check-db.py --fix`）。
 
 ---
 
@@ -152,7 +153,14 @@ INSERT INTO SCREEN_INFO (
 
 桌面判断插件是否更新，只看 `SCREEN_INFO.FILE_SIZE` 和 `SCREEN_INFO.MD5`。只换 APK 不改这两列，桌面会继续用 `plugins_data` 里的旧 dex。
 
-在 PC 上执行：
+在 PC 上执行（Windows 不需要 Python）：
+
+```powershell
+.\scripts\sync-db.ps1 -CheckOnly   # 只检查，逐项打印是否一致
+.\scripts\sync-db.ps1              # 把大小 / MD5 写回 launcher_new.db，并重建 SHA256SUMS.txt
+```
+
+装了 Python 的话，功能更全的是：
 
 ```bash
 python release/check-db.py          # 只检查，逐项打印是否一致

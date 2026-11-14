@@ -14,22 +14,26 @@
 ## 结构
 
 ```
+shared/plugin-sdk/app/
+  android/support/v4/app/Fragment.java                    support-v4 Fragment 垫片（有实现：持有 Activity）
+  com/stv/launcher/sdk/fragment/BaseFragment.java         桌面 BaseFragment 的运行时垫片
+  com/stv/launcher/sdk/plugin/ActivityActionHandler.java
 app-host/
-  src/com/dsh/tvdesk/app/HostActivity.java              独立应用的宿主
-  src/com/stv/launcher/sdk/fragment/BaseFragment.java   桌面 BaseFragment 的运行时垫片
-  src/com/stv/launcher/sdk/plugin/ActivityActionHandler.java
-  src/android/support/v4/app/Fragment.java              support-v4 Fragment 垫片
-  build-app.ps1                                         两个应用共用的构建脚本
+  src/com/dsh/tvdesk/app/HostActivity.java                独立应用的宿主
 app-news/
   AndroidManifest.xml
   src/com/dsh/tvdesk/news/app/NewsActivity.java
   res/drawable-nodpi/{ic_launcher,banner}.png
-  build.ps1
+  build.ps1                                               转发到 scripts/build-app.ps1
 app-stock/
   ... 同上
+scripts/build-app.ps1                                     两个应用共用的构建流水线
 ```
 
 页面代码没有复制：`app-news` 编译时直接把 `plugin-news/src` 拿进来（排除只给 launcher 反射用的 `CreateApi.java`），股票同理。
+
+> 插件版的同名类在 `shared/plugin-sdk/plugin/`，那是**空壳**（只有方法签名，用来过 javac）；
+> 独立应用用的这份**带实现**。两份内容不同，所以分开存放而不是共用一份。
 
 ## 宿主做了什么
 
@@ -56,6 +60,14 @@ app-stock/
 .\app-stock\build.ps1
 ```
 
+或者从仓库根目录一起构建：
+
+```powershell
+.\build.ps1 -Target news-app
+.\build.ps1 -Target stock-app -Release
+```
+
+模块目录下的 `build.ps1` 只是包装，实际逻辑在 `scripts/build-app.ps1`。
 工具链默认找仓库同级（或任意上级目录）的 `tools\android-sdk` 和 `tools\jdk`；也可以设置环境变量 `TVTOOLS` 指向包含这两个目录的位置。
 
 产物在 `app-news\build\news-app.apk` / `app-stock\build\stock-app.apk`，加 `-Release` 会复制到 `release\`：
@@ -65,7 +77,7 @@ app-stock/
 .\app-stock\build.ps1 -Release
 ```
 
-签名优先复用 `plugin-live\build\tvdesk.jks`；找不到时在 `build\` 下生成一个开发用 keystore。换机器构建时要保留同一个 keystore，否则覆盖安装会报签名不一致。
+签名统一用 `signing\tvdesk.jks`（和插件同一把钥匙），找不到时自动生成一个开发用 keystore。换机器构建时要保留同一个 keystore，否则覆盖安装会报签名不一致。
 
 ## 安装
 

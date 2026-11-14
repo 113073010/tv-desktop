@@ -6,6 +6,8 @@
 
 ![股票](docs/images/stock-main.jpg)
 
+**文档**：[架构](docs/ARCHITECTURE.md) · [刷机恢复](docs/RESTORE.md) · [真机实测记录](docs/DEVICE.md) · [独立应用](docs/STANDALONE.md) · [语音桥](docs/edge-tts.md) · [变更记录](CHANGELOG.md)
+
 ## 这是什么
 
 乐视（Letv）超级电视的原生桌面 `com.stv.launcher` 有一套**插件机制**：插件 APK 不放桌面图标，而是被桌面当作「一个 Tab 页」加载，直接显示在顶部 Tab 栏里。（别人都在做减法，而我却在做加法）
@@ -175,19 +177,23 @@ adb shell su -c 'sh /data/local/tmp/tvrestore/restore.sh'
 
 回到电视桌面，顶部 Tab 栏应该能看到新闻、直播、豆瓣、电台、股票五个新 Tab。
 
-> 如果脚本提示数据库和 APK 校验不一致，先跑一次 `python release/check-db.py --fix`，或者加 `--force` 强制执行。
+> 如果脚本提示数据库和 APK 校验不一致，先在 PC 上跑一次 `.\scripts\sync-db.ps1`
+> （或 `python release/check-db.py --fix`），再把 `release/` 重新 push 上去；也可以加 `--force` 强制执行。
 >
 > 直播频道表需要自己放到 `/sdcard/DIYP影音/*.txt`（DIYP 格式，`#` 开头是分组），脚本不带频道源。
 
 换过 APK 之后，先在 PC 上跑一次：
 
-```bash
-python release/check-db.py --fix
+```powershell
+.\scripts\sync-db.ps1
 ```
 
-它会把 `SCREEN_INFO` 里的 `FILE_SIZE` / `MD5` / 版本号 / 插件路径与新 APK 对齐；`restore.sh` 也会在覆盖前检查，不一致就拒绝执行（除非加 `--force`）。
+它会把 `SCREEN_INFO` 里的 `FILE_SIZE` / `MD5` 与新 APK 对齐并重建 `SHA256SUMS.txt`；
+（装了 Python 的话 `python release/check-db.py --fix` 效果相同，还会顺手对齐版本号）。
+`restore.sh` 也会在覆盖前检查，不一致就拒绝执行（除非加 `--force`）。
 
-详细安装教程放在 [docs/RESTORE.md](docs/RESTORE.md)，真机实测记录放在 [docs/DEVICE.md](docs/DEVICE.md)。
+详细安装教程放在 [docs/RESTORE.md](docs/RESTORE.md)，真机实测记录放在 [docs/DEVICE.md](docs/DEVICE.md)，
+文档索引见 [docs/README.md](docs/README.md)。
 
 ## 实测环境
 
@@ -204,37 +210,75 @@ python release/check-db.py --fix
 ## 目录结构
 
 ```
-plugin-news/     新闻插件源码（AndroidManifest.xml + src + stubs + build.ps1）
-plugin-live/     直播插件源码
-plugin-douban/   豆瓣荐片插件源码
-plugin-radio/    电台插件源码
-plugin-stock/    股票插件源码
-app-news/        新闻独立应用（AndroidManifest.xml + Activity + res + build.ps1）
-app-stock/       股票独立应用
-app-host/        独立应用宿主层（HostActivity + support-v4 / launcher SDK 垫片 + 构建脚本）
-release/         签名后的 APK、数据库模板、部署脚本、check-db.py
-docs/            逆向笔记（插件机制、踩坑、真机实测）
+build.ps1              统一构建入口：-Target news|live|douban|radio|stock|news-app|stock-app|all -Release
+scripts/
+  build-plugin.ps1     插件构建流水线（5 个插件共用）
+  build-app.ps1        独立应用构建流水线（2 个应用共用）
+  bump-version.ps1     改 versionName / versionCode
+  sync-db.ps1          把 release APK 的 MD5 / 大小写回 launcher_new.db
+  pack-restore.ps1     打恢复包 zip
+shared/plugin-sdk/
+  plugin/              编译期桩：桌面 launcher SDK + support-v4（不进 dex）
+  app/                 独立应用运行时垫片：Fragment / BaseFragment / ActivityActionHandler
+plugin-news/           新闻插件源码（AndroidManifest.xml + src + test + build.ps1 包装）
+plugin-live/           直播插件源码（额外打包 ijk 播放器）
+plugin-douban/         豆瓣荐片插件源码
+plugin-radio/          电台插件源码
+plugin-stock/          股票插件源码
+app-news/              新闻独立应用（Activity + res + build.ps1 包装）
+app-stock/             股票独立应用
+app-host/              独立应用宿主层 HostActivity
+signing/               签名 keystore（*.jks 不入库，首次构建自动生成）
+release/               签名 APK + 数据库模板 + 电视端部署脚本 + SHA256SUMS（扁平，整包可 push）
+docs/                  逆向笔记与运维文档，索引见 docs/README.md
 ```
 
 ## 构建
 
-每个插件目录下都有 `build.ps1`，流程：
+只装 JDK 17 和 Android build-tools 34 就能跑；不需要 Gradle。
+
+```powershell
+.\build.ps1                      # 五个插件 + 两个独立应用
+.\build.ps1 -Target news         # 只构建新闻插件
+.\build.ps1 -Target news-app     # 只构建新闻独立应用
+.\build.ps1 -Target all -Release # 全部构建并复制到 release/
+```
+
+流水线：
 
 ```
-javac → d8 → aapt2 link → 塞入 dex → zipalign → apksigner
+javac（编译 shared/plugin-sdk 的桩）→ javac → d8 → aapt2 link → 塞入 dex → zipalign → apksigner
 ```
 
-独立应用用 `app-news\build.ps1`、`app-stock\build.ps1`，流程一样，额外编译 `res/` 图标和 banner。产物在各自 `build/` 下，加 `-Release` 会复制到 `release/`。
+独立应用多一步 `aapt2 compile`（图标 / banner）。产物在各自 `build/` 下，模块目录里的
+`build.ps1` 只是转发到 `scripts/` 的薄包装，可以继续单独调用。
 
-需要 JDK 17 + Android build-tools 34。
+工具链查找顺序：`$env:TVTOOLS` → 仓库及其各级上级目录下的 `tools/`（需含 `android-sdk` 和 `jdk`）。
+
+### 改完代码之后
+
+```powershell
+.\scripts\bump-version.ps1 -Target news   # 版本号 +1（也可 -Version / -Code 指定）
+.\build.ps1 -Target news -Release         # 构建并复制到 release/
+.\scripts\sync-db.ps1                     # 同步 launcher_new.db 的 MD5 / FILE_SIZE + 重建 SHA256SUMS
+```
+
+> `sync-db.ps1` 需要 `sqlite3.exe`，默认在 `tools/platform-tools/` 下找；没装 Python 也能用。
+> 已装 Python 的话 `python release/check-db.py --fix` 效果相同。
+
+签名统一用 `signing/tvdesk.jks`（同一个 keystore，插件和独立应用共用）；文件不入库，
+第一次构建时自动生成，换机器构建会得到不同签名——覆盖安装会报签名不一致。
 
 ## 插件机制要点
 
 - 插件是普通 APK，放在 launcher 的 `files/plugins/` 下，由 launcher 用 DexClassLoader 加载
 - manifest 中声明 `meta-data`：`ILePluginCreateApi`（CreateApi 全类名）、`minDependentVersion`、`widgetName`
-- `dependentPackages="com.stv.launcher.sdk;android.support.v4"`，launcher 提供这两个包的 stub
+- `dependentPackages="com.stv.launcher.sdk;android.support.v4"`，launcher 提供这两个包；仓库里
+  `shared/plugin-sdk/plugin/` 是它们的**编译期桩**，只用来过 javac，不会打进 dex
 - 写入新 APK 后必须**同步更新 `SCREEN_INFO` 里的 `MD5` 和 `FILE_SIZE`**，否则 launcher 认为没变化，继续用旧 dex
 - 替换 APK 前要 `kill -9` launcher 进程，否则系统会立即拉起旧进程并持有旧文件
+
+分层、加载链路和发版流程见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 已知问题
 
